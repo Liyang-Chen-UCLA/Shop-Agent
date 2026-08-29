@@ -1,0 +1,22 @@
+{
+  "name": "echo_python",
+  "description": "Echo a value for framework tests.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "value": { "type": "string" }
+    },
+    "required": ["value"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "value": { "type": "string" },
+      "hasOpenCodeKey": { "type": "boolean" }
+    },
+    "required": ["value", "hasOpenCodeKey"],
+    "additionalProperties": false
+  }
+}

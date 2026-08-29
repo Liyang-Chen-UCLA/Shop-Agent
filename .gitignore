@@ -1,0 +1,6 @@
+# pi-cli
+node_modules/
+.shop-agent/
+.env
+.env.*
+!.env.example
