@@ -10,6 +10,7 @@ root
 ├─ shop-agent.config.ts      thin configuration entry
 ├─ shop/                     business extension workspace
 │  ├─ agents.ts              profiles and tool allowlists
+│  ├─ data/                  canonical business datasets
 │  ├─ prompts/               role instructions
 │  └─ tools/                 Python tool manifests and implementations
 ├─ src/
@@ -47,7 +48,22 @@ Each run starts `src/framework/subagents/child-runner.ts` in an independent Node
 
 Python tools are discovered from `shop/tools/**/tool.json`, but discovery does not expose them automatically. A profile in `shop/agents.ts` must explicitly include the tool name.
 
-Every call starts `D:\App\miniforge3\envs\shop-agent\python.exe`, sends one JSON request over stdin, and validates the JSON response against the manifest output schema. Python receives only the Windows runtime variables and explicitly allowlisted business variables; it does not inherit `OPENCODE_API_KEY` by default.
+Every call starts `D:\App\miniforge3\envs\shop-agent\python.exe` in UTF-8 mode, sends one JSON request over stdin, and validates the JSON response against the manifest output schema. Python receives only the Windows runtime variables and explicitly allowlisted business variables; it does not inherit `OPENCODE_API_KEY` by default.
+
+For tools used by the main orchestrator, the framework injects a trusted runtime context containing the current session ID and data-directory path. These values are outside the model-authored arguments. LangGraph state tools use that session ID as the SQLite checkpoint thread key, preventing a model from choosing another session's state.
+
+## Product-analysis flow
+
+```text
+user request
+  → orchestrator extracts product category names and flat preferences
+  → route_agent queries a small taxonomy frontier through Python tools
+  → user resolves cross-category, ambiguous, or direct-child choices
+  → orchestrator upserts one canonical category task
+  → product_analyst constructs evaluation criteria and a comparison checklist
+```
+
+The canonical taxonomy is `shop/data/google_product_taxonomy_zh-CN.jsonl`. Tools may index the full file internally, but disclose only search matches, requested nodes, or direct children to the route agent.
 
 ## Persistent data
 
@@ -56,5 +72,6 @@ Every call starts `D:\App\miniforge3\envs\shop-agent\python.exe`, sends one JSON
 - `sessions/` contains main transcripts as JSONL plus metadata.
 - `runs/` contains subagent events, transcripts, outputs, and status.
 - `logs/` contains redacted diagnostics.
+- `checkpoints/task-state.sqlite3` contains LangGraph checkpoints for minimal product-analysis task state.
 
 Deferred concurrency, background runs, FleetView, and a persistent Python worker are documented in [`backlog/`](./backlog/).

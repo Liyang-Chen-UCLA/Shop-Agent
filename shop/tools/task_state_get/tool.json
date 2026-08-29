@@ -1,0 +1,16 @@
+{
+  "name": "task_state_get",
+  "description": "Load the canonical product-analysis task state for the current trusted session.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": { "state": { "type": "object" } },
+    "required": ["state"],
+    "additionalProperties": false
+  }
+}

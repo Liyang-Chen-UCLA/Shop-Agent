@@ -6,3 +6,4 @@ Current items:
 
 - [Persistent Python worker](./persistent-python-worker.md)
 - [Background and concurrent subagents](./background-subagents.md)
+- [Resumable task execution](./resumable-task-execution.md)

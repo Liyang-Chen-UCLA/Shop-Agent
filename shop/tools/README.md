@@ -40,11 +40,13 @@ Example manifest:
 
 The runner starts `D:\App\miniforge3\envs\shop-agent\python.exe`, sends one JSON object to stdin, and expects exactly one JSON object on stdout. Write logs to stderr.
 
-Input:
+Input (the runtime injects `context`; it is not supplied by the model):
 
 ```json
-{"callId":"...","tool":"search_products","arguments":{"query":"..."}}
+{"callId":"...","tool":"search_products","arguments":{"query":"..."},"context":{"sessionId":"...","dataDirectory":"..."}}
 ```
+
+Python always starts in UTF-8 mode. State tools require the trusted session context; taxonomy and other stateless tools may ignore it.
 
 Success:
 

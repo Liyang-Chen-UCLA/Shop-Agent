@@ -99,7 +99,15 @@ export class ShopAgent {
     const model = this.runtime.getModel(session.metadata.model);
     this.runtime.ensureThinking(model, session.metadata.thinking);
     const allowlist = profile.tools ?? [];
-    const tools = createPythonAgentTools(this.toolDefinitions, allowlist, this.config.python);
+    const tools = createPythonAgentTools(
+      this.toolDefinitions,
+      allowlist,
+      this.config.python,
+      () => ({
+        sessionId: this.session.metadata.id,
+        dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
+      }),
+    );
     if (allowlist.includes("delegate_agent")) {
       tools.push(createDelegationTool(this.config.agents, this.subagents, () => this.session.metadata.agentOverrides));
     }

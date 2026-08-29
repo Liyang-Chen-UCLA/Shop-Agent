@@ -1,0 +1,17 @@
+{
+  "name": "task_state_delete",
+  "description": "Delete a product-analysis task only when the user explicitly asks to remove or cancel it.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": { "task_id": { "type": "string" } },
+    "required": ["task_id"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": { "state": { "type": "object" } },
+    "required": ["state"],
+    "additionalProperties": false
+  }
+}

@@ -26,7 +26,13 @@ Show full error stacks in the TUI and write diagnostics to `.shop-agent/logs/sho
 .\start.ps1 -DebugMode
 ```
 
-No npm command, package publication, link, compilation, or installation step is part of this workflow.
+No npm command, package publication, link, or compilation step is part of this workflow.
+
+The Python business tools require the packages pinned in `shop/requirements.txt`, installed into `D:\App\miniforge3\envs\shop-agent`.
+
+```powershell
+& 'D:\App\miniforge3\envs\shop-agent\python.exe' -m pip install -r shop\requirements.txt
+```
 
 ## Commands
 
@@ -58,6 +64,7 @@ Pressing `Ctrl+C` aborts active work. Pressing it while idle exits.
 - `.shop-agent/sessions/` stores main sessions as JSONL plus metadata.
 - `.shop-agent/runs/` stores child events, transcripts, outputs, and status.
 - `.shop-agent/logs/` stores redacted diagnostics.
+- `.shop-agent/checkpoints/task-state.sqlite3` stores session-isolated product-analysis state.
 - `docs/backlog/` records intentionally deferred framework capabilities.
 
-The orchestrator has only `delegate_agent` by default. The included `delegate` subagent has no business tools. Add future Python tool names to a subagent profile's explicit `tools` allowlist in `shop/agents.ts`.
+The orchestrator has narrow task-state tools plus `delegate_agent`. The `route_agent` can access only taxonomy tools, the `product_analyst` is tool-free, and the general `delegate` remains tool-free. Add future Python tool names to a profile's explicit `tools` allowlist in `shop/agents.ts`.

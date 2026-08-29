@@ -1,0 +1,22 @@
+{
+  "name": "taxonomy_search_nodes",
+  "description": "Search the canonical product taxonomy for several product names at once. Returns a small ranked result set per query.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "queries": { "type": "array", "items": { "type": "string" } },
+      "limit": { "type": "integer" }
+    },
+    "required": ["queries"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "results": { "type": "array", "items": { "type": "object" } }
+    },
+    "required": ["results"],
+    "additionalProperties": false
+  }
+}

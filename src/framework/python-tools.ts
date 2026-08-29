@@ -4,7 +4,7 @@ import path from "node:path";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { validateJsonSchema } from "./schema.ts";
-import type { PythonConfig, PythonToolDefinition } from "./types.ts";
+import type { PythonConfig, PythonToolDefinition, PythonToolRuntimeContext } from "./types.ts";
 
 const BASE_ENV = ["SystemRoot", "WINDIR", "TEMP", "TMP", "PATH", "PATHEXT", "COMSPEC"];
 const MAX_STDOUT_BYTES = 4 * 1024 * 1024;
@@ -87,11 +87,12 @@ async function executePythonTool(
   config: PythonConfig,
   callId: string,
   args: unknown,
+  context?: PythonToolRuntimeContext,
   signal?: AbortSignal,
 ): Promise<unknown> {
   const timeoutMs = definition.timeoutMs ?? config.timeoutMs;
   return new Promise((resolve, reject) => {
-    const child = spawn(config.executable, [definition.entry], {
+    const child = spawn(config.executable, ["-X", "utf8", definition.entry], {
       cwd: definition.directory,
       env: buildEnvironment(config, definition),
       stdio: ["pipe", "pipe", "pipe"],
@@ -158,7 +159,7 @@ async function executePythonTool(
         resolve(response.result);
       });
     });
-    child.stdin.end(`${JSON.stringify({ callId, tool: definition.name, arguments: args })}\n`);
+    child.stdin.end(`${JSON.stringify({ callId, tool: definition.name, arguments: args, context })}\n`);
   });
 }
 
@@ -166,6 +167,7 @@ export function createPythonAgentTools(
   definitions: Map<string, PythonToolDefinition>,
   allowlist: string[],
   config: PythonConfig,
+  getRuntimeContext?: () => PythonToolRuntimeContext,
 ): AgentTool<any>[] {
   return allowlist
     .filter((name) => name !== "delegate_agent")
@@ -179,7 +181,7 @@ export function createPythonAgentTools(
         parameters: Type.Unsafe(definition.inputSchema) as TSchema,
         executionMode: "sequential",
         async execute(toolCallId, params, signal) {
-          const result = await executePythonTool(definition, config, toolCallId, params, signal);
+          const result = await executePythonTool(definition, config, toolCallId, params, getRuntimeContext?.(), signal);
           return {
             content: [{ type: "text", text: JSON.stringify(result) }],
             details: { tool: definition.name },

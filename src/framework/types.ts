@@ -65,6 +65,11 @@ export type PythonToolDefinition = {
   manifestPath: string;
 };
 
+export type PythonToolRuntimeContext = {
+  sessionId: string;
+  dataDirectory: string;
+};
+
 export type SessionMetadata = {
   id: string;
   title: string;

@@ -1,0 +1,36 @@
+{
+  "name": "task_state_upsert",
+  "description": "Create or update one category-analysis task, activate it, merge flat preferences, and preserve task identity during route refinement.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "task_id": { "type": "string" },
+      "product": { "type": "string" },
+      "preference": { "type": "object" },
+      "remove_preference_keys": { "type": "array", "items": { "type": "string" } },
+      "route": {
+        "type": "object",
+        "properties": {
+          "node_id": { "type": "string" },
+          "node_name": { "type": "string" },
+          "node_path": { "type": "string" }
+        },
+        "required": ["node_id", "node_name", "node_path"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["product", "preference", "route"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "action": { "type": "string", "enum": ["created", "updated", "merged"] },
+      "task": { "type": "object" },
+      "state": { "type": "object" }
+    },
+    "required": ["action", "task", "state"],
+    "additionalProperties": false
+  }
+}

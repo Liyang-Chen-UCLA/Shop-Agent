@@ -1,5 +1,7 @@
 # pi-cli
 node_modules/
+__pycache__/
+*.py[cod]
 .shop-agent/
 .env
 .env.*

@@ -1,0 +1,22 @@
+{
+  "name": "taxonomy_get_nodes",
+  "description": "Read several canonical taxonomy nodes by exact ID in one call.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "node_ids": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["node_ids"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "nodes": { "type": "array", "items": { "type": "object" } },
+      "missing_node_ids": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["nodes", "missing_node_ids"],
+    "additionalProperties": false
+  }
+}

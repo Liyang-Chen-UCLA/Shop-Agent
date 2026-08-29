@@ -1,0 +1,17 @@
+{
+  "name": "task_state_set_active",
+  "description": "Activate an existing product-analysis task in the current trusted session.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": { "task_id": { "type": "string" } },
+    "required": ["task_id"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": { "state": { "type": "object" } },
+    "required": ["state"],
+    "additionalProperties": false
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "taxonomy_get_children",
+  "description": "Read the direct children of several taxonomy nodes in one call for progressive category disclosure.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "node_ids": { "type": "array", "items": { "type": "string" } }
+    },
+    "required": ["node_ids"],
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "results": { "type": "array", "items": { "type": "object" } }
+    },
+    "required": ["results"],
+    "additionalProperties": false
+  }
+}
