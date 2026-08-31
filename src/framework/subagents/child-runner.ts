@@ -47,9 +47,9 @@ async function main(): Promise<void> {
         emit({ type: "thinking_delta", delta: event.assistantMessageEvent.delta });
       }
     } else if (event.type === "tool_execution_start") {
-      emit({ type: "tool_start", name: event.toolName });
+      emit({ type: "tool_start", name: event.toolName, args: event.args });
     } else if (event.type === "tool_execution_end") {
-      emit({ type: "tool_end", name: event.toolName, isError: event.isError });
+      emit({ type: "tool_end", name: event.toolName, result: event.result, isError: event.isError });
     }
   });
 

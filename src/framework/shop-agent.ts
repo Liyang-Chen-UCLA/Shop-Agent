@@ -1,5 +1,6 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { Agent, type AgentEvent, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { loadConfig } from "./config.ts";
 import { checkOpenCodeAuth, createModelRuntime, type ModelRuntime } from "./model-runtime.ts";
@@ -13,10 +14,12 @@ import type {
   LoadedSession,
   ResolvedAgentProfile,
   ResolvedConfig,
+  RunDetail,
   RunSummary,
   SessionMetadata,
   ShopAgentConfigInput,
   ShopAgentEvent,
+  TaskState,
 } from "./types.ts";
 
 type Listener = (event: ShopAgentEvent) => void | Promise<void>;
@@ -195,6 +198,21 @@ export class ShopAgent {
 
   listRuns(): RunSummary[] {
     return this.subagents.listRuns();
+  }
+
+  getRun(idOrPrefix: string): RunDetail {
+    return this.subagents.getRun(idOrPrefix);
+  }
+
+  async getTaskState(signal?: AbortSignal): Promise<TaskState> {
+    const tool = this.agent.state.tools.find((item) => item.name === "task_state_get");
+    if (!tool) throw new Error("The orchestrator does not expose task_state_get.");
+    const result = await tool.execute(`tui-task-state-${randomUUID()}`, {}, signal);
+    const content = result.content.find((item) => item.type === "text");
+    if (!content || content.type !== "text") throw new Error("task_state_get returned no text result.");
+    const envelope = JSON.parse(content.text) as { state?: TaskState };
+    if (!envelope.state) throw new Error("task_state_get returned no state.");
+    return envelope.state;
   }
 
   async setModel(agentId: string, modelId: string): Promise<void> {

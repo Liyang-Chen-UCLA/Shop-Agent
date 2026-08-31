@@ -2,6 +2,7 @@ import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   CombinedAutocompleteProvider,
   Container,
+  CURSOR_MARKER,
   Editor,
   Markdown,
   ProcessTerminal,
@@ -10,6 +11,7 @@ import {
   TuiMainScreen,
   matchesKey,
   type OverlayHandle,
+  type Component,
   type SelectItem,
   type SlashCommand,
   type TUI,
@@ -17,7 +19,8 @@ import {
 import { messageText } from "../framework/content.ts";
 import { colors, editorTheme, markdownTheme, selectTheme } from "./theme.ts";
 import type { ShopAgent } from "../framework/shop-agent.ts";
-import type { ShopAgentEvent } from "../framework/types.ts";
+import type { RunEvent, RunSummary, ShopAgentEvent, SubagentUpdateDetails } from "../framework/types.ts";
+import { renderRunCard, renderRunDetail, renderTaskState, summarizeValue } from "./presentation.ts";
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -30,10 +33,52 @@ const COMMANDS: SlashCommand[] = [
   { name: "model", description: "Select or override an OpenCode Go model", argumentHint: "[agent] [model]" },
   { name: "thinking", description: "Set reasoning level", argumentHint: "[agent] <level>" },
   { name: "agents", description: "List configured agents" },
-  { name: "runs", description: "List subagent runs" },
+  { name: "runs", description: "Browse subagent runs", argumentHint: "[run-id]" },
+  { name: "tasks", description: "Show active task state", argumentHint: "[all]" },
   { name: "abort", description: "Abort the active run" },
   { name: "exit", description: "Save and exit" },
 ];
+
+type RunCard = RunSummary & {
+  component: Markdown;
+  events: RunEvent[];
+};
+
+class ScrollableMarkdownOverlay implements Component {
+  focused = false;
+  private readonly markdown: Markdown;
+  private readonly tui: TUI;
+  private offset = 0;
+  private lineCount = 0;
+
+  constructor(tui: TUI, text: string) {
+    this.tui = tui;
+    this.markdown = new Markdown(text, 1, 1, markdownTheme);
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, "up")) this.offset = Math.max(0, this.offset - 1);
+    else if (matchesKey(data, "down")) this.offset = Math.min(Math.max(0, this.lineCount - 1), this.offset + 1);
+    else if (matchesKey(data, "pageUp")) this.offset = Math.max(0, this.offset - 10);
+    else if (matchesKey(data, "pageDown")) this.offset = Math.min(Math.max(0, this.lineCount - 1), this.offset + 10);
+    else if (matchesKey(data, "home")) this.offset = 0;
+    else if (matchesKey(data, "end")) this.offset = Math.max(0, this.lineCount - 1);
+    else return;
+    this.tui.requestRender();
+  }
+
+  invalidate(): void {
+    this.markdown.invalidate();
+  }
+
+  render(width: number): string[] {
+    const lines = this.markdown.render(width);
+    this.lineCount = lines.length;
+    const visible = lines.slice(this.offset);
+    const hint = `↑/↓ scroll · PgUp/PgDn · Home/End · Ctrl+C close${this.offset ? ` · line ${this.offset + 1}` : ""}`;
+    return [this.focused ? `${CURSOR_MARKER}${colors.gray(hint)}` : colors.gray(hint), ...visible];
+  }
+}
 
 export class ShopAgentTui {
   private readonly app: ShopAgent;
@@ -44,6 +89,8 @@ export class ShopAgentTui {
   private readonly editor: Editor;
   private assistant?: Markdown;
   private assistantText = "";
+  private readonly runCardsByCall = new Map<string, RunCard>();
+  private readonly runCardsById = new Map<string, RunCard>();
   private overlay?: OverlayHandle;
   private stopped = false;
   private resolveExit?: () => void;
@@ -128,12 +175,54 @@ export class ShopAgentTui {
         this.status.setText(colors.magenta("  ◇ reasoning"));
       }
     } else if (event.type === "tool_execution_start") {
-      this.status.setText(colors.yellow(`  ◇ ${event.toolName}`));
+      const args = event.args as { action?: string; agent?: string; task?: string } | undefined;
+      if (event.toolName === "delegate_agent" && args?.action === "run" && args.agent && args.task) {
+        const card: RunCard = {
+          id: "",
+          agent: args.agent,
+          task: args.task,
+          state: "starting",
+          startedAt: new Date().toISOString(),
+          events: [],
+          component: new Markdown("", 1, 1, markdownTheme),
+        };
+        card.component.setText(renderRunCard(card));
+        this.runCardsByCall.set(event.toolCallId, card);
+        this.transcript.addChild(card.component);
+        this.assistant = undefined;
+        this.status.setText(colors.yellow(`  ◇ subagent ${args.agent}`));
+      } else {
+        this.status.setText(colors.yellow(`  ◇ ${event.toolName}`));
+      }
     } else if (event.type === "tool_execution_update") {
-      const details = event.partialResult?.details as { state?: string; tool?: string } | undefined;
-      this.status.setText(colors.yellow(`  ◇ subagent ${details?.tool ?? details?.state ?? "working"}`));
+      const details = event.partialResult?.details as SubagentUpdateDetails | undefined;
+      if (details?.kind === "subagent") {
+        const card = this.runCardsByCall.get(event.toolCallId) ?? this.runCardsById.get(details.runId);
+        if (card) {
+          card.id = details.runId;
+          card.agent = details.agent;
+          card.task = details.task;
+          card.events.push(details.event);
+          if (details.event.state) card.state = details.event.state;
+          if (details.event.type === "result" || (details.event.type === "error" && details.event.state)) {
+            card.endedAt = details.event.timestamp;
+          }
+          this.runCardsById.set(details.runId, card);
+          card.component.setText(renderRunCard(card));
+          const stage = details.event.tool ?? details.event.message ?? details.event.type;
+          this.status.setText(colors.yellow(`  ◇ subagent ${stage}`));
+        }
+      }
     } else if (event.type === "tool_execution_end") {
-      this.addNotice(`${event.toolName} ${event.isError ? "failed" : "completed"}.`, event.isError ? "error" : "info");
+      const card = this.runCardsByCall.get(event.toolCallId);
+      if (card) {
+        if (!card.endedAt) card.endedAt = new Date().toISOString();
+        if (event.isError && card.state !== "aborted") card.state = "failed";
+        else if (card.state !== "completed") card.state = "completed";
+        card.component.setText(renderRunCard(card));
+      } else {
+        this.addNotice(`${event.toolName} ${event.isError ? "failed" : "completed"}.`, event.isError ? "error" : "info");
+      }
     } else if (event.type === "agent_end") {
       this.setReadyStatus();
     }
@@ -149,11 +238,13 @@ export class ShopAgentTui {
           break;
         case "clear":
           this.transcript.clear();
+          this.clearRunCards();
           this.addNotice("Visible transcript cleared. Model context is unchanged.", "info");
           break;
         case "new": {
           const session = await this.app.newSession();
           this.transcript.clear();
+          this.clearRunCards();
           this.addNotice(`New session ${session.id.slice(0, 8)}.`, "info");
           break;
         }
@@ -178,7 +269,15 @@ export class ShopAgentTui {
           this.showAgents();
           break;
         case "runs":
-          this.showRuns();
+          if (args[0]) this.showRunDetail(args[0]);
+          else this.showRuns();
+          break;
+        case "tasks":
+          if (args.length > 1 || (args[0] && args[0].toLowerCase() !== "all")) {
+            this.addNotice("Usage: /tasks [all]", "warn");
+          } else {
+            await this.showTasks(args[0]?.toLowerCase() === "all");
+          }
           break;
         case "abort":
           if (this.app.isBusy) this.app.abort();
@@ -223,6 +322,7 @@ export class ShopAgentTui {
   private async resume(id: string): Promise<void> {
     const session = await this.app.resumeSession(id);
     this.transcript.clear();
+    this.clearRunCards();
     this.renderHistory();
     this.addNotice(`Resumed ${session.id.slice(0, 8)} · ${session.title}`, "info");
   }
@@ -268,10 +368,34 @@ export class ShopAgentTui {
 
   private showRuns(): void {
     const runs = this.app.listRuns();
-    const body = runs.length
-      ? runs.map((run) => `- \`${run.id.slice(0, 8)}\` ${run.agent} — ${run.state}`).join("\n")
-      : "No subagent runs in this process.";
-    this.transcript.addChild(new Markdown(`### Runs\n\n${body}`, 1, 1, markdownTheme));
+    if (!runs.length) {
+      this.addNotice("No subagent runs in this process.", "warn");
+      return;
+    }
+    const items = runs.map((run) => ({
+      value: run.id,
+      label: `${run.id.slice(0, 8)}  ${run.agent} · ${run.state}`,
+      description: summarizeValue(run.task, 100),
+    }));
+    this.showPicker(items, (item) => this.showRunDetail(item.value));
+  }
+
+  private showRunDetail(id: string): void {
+    const run = this.app.getRun(id);
+    this.closeOverlay();
+    const content = new ScrollableMarkdownOverlay(this.tui, renderRunDetail(run));
+    this.overlay = this.tui.showOverlay(content, { width: "90%", maxHeight: "80%", anchor: "center", margin: 1 });
+  }
+
+  private async showTasks(all: boolean): Promise<void> {
+    this.status.setText(colors.yellow("  ◇ loading task state"));
+    this.tui.requestRender();
+    try {
+      const state = await this.app.getTaskState();
+      this.transcript.addChild(new Markdown(renderTaskState(state, all), 1, 1, markdownTheme));
+    } finally {
+      this.setReadyStatus();
+    }
   }
 
   private showPicker(items: SelectItem[], onSelect: (item: SelectItem) => void): void {
@@ -289,6 +413,11 @@ export class ShopAgentTui {
     this.overlay?.hide();
     this.overlay = undefined;
     this.tui.setFocus(this.editor);
+  }
+
+  private clearRunCards(): void {
+    this.runCardsByCall.clear();
+    this.runCardsById.clear();
   }
 
   private addNotice(message: string, level: "info" | "warn" | "error"): void {

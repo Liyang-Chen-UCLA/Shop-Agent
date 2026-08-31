@@ -4,7 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import type { AgentToolUpdateCallback, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { PythonToolDefinition, ResolvedAgentProfile, ResolvedConfig, RunSummary } from "../types.ts";
+import type {
+  PythonToolDefinition,
+  ResolvedAgentProfile,
+  ResolvedConfig,
+  RunDetail,
+  RunEvent,
+  RunSummary,
+  SubagentUpdateDetails,
+} from "../types.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 
 type AgentOverride = { model?: string; thinking?: ThinkingLevel };
@@ -22,7 +30,7 @@ export type RunResult = { text: string; value?: unknown; runId: string };
 const CHILD_RUNNER = fileURLToPath(new URL("./child-runner.ts", import.meta.url));
 
 export class SubagentManager {
-  private readonly runs = new Map<string, RunSummary>();
+  private readonly runs = new Map<string, RunDetail>();
   private readonly config: ResolvedConfig;
   private readonly toolDefinitions: Map<string, PythonToolDefinition>;
 
@@ -35,21 +43,35 @@ export class SubagentManager {
   }
 
   listRuns(): RunSummary[] {
-    return [...this.runs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return [...this.runs.values()]
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .map(({ events: _events, output: _output, value: _value, model: _model, thinking: _thinking, ...summary }) => ({ ...summary }));
+  }
+
+  getRun(idOrPrefix: string): RunDetail {
+    const matches = [...this.runs.values()].filter((run) => run.id === idOrPrefix || run.id.startsWith(idOrPrefix));
+    if (matches.length === 0) throw new Error(`Unknown subagent run: ${idOrPrefix}`);
+    if (matches.length > 1) throw new Error(`Ambiguous subagent run prefix: ${idOrPrefix}`);
+    const run = matches[0];
+    return { ...run, events: run.events.map((event) => ({ ...event })) };
   }
 
   async run(options: RunOptions): Promise<RunResult> {
     const runId = randomUUID();
-    const summary: RunSummary = {
+    const detail: RunDetail = {
       id: runId,
       agent: options.profile.id,
+      task: options.task,
       state: "starting",
       startedAt: new Date().toISOString(),
+      model: options.override?.model ?? options.profile.model?.id ?? this.config.defaultModel,
+      thinking: options.override?.thinking ?? options.profile.thinking ?? this.config.defaultThinking,
+      events: [],
     };
-    this.runs.set(runId, summary);
+    this.runs.set(runId, detail);
     const runDirectory = path.join(this.config.cwd, this.config.dataDirectory, "runs", runId);
     await mkdir(runDirectory, { recursive: true });
-    await this.saveSummary(runDirectory, summary);
+    await this.saveSummary(runDirectory, detail);
 
     const tools = (options.profile.tools ?? [])
       .filter((name) => name !== "delegate_agent")
@@ -62,34 +84,48 @@ export class SubagentManager {
       runId,
       task: options.task,
       profile: options.profile,
-      model: options.override?.model ?? options.profile.model?.id ?? this.config.defaultModel,
-      thinking: options.override?.thinking ?? options.profile.thinking ?? this.config.defaultThinking,
+      model: detail.model,
+      thinking: detail.thinking,
       python: this.config.python,
       tools,
     };
 
     const attempts = Math.max(1, (options.profile.maxRetries ?? 0) + 1);
     let lastError: unknown;
+    let lastAttempt = 1;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      lastAttempt = attempt;
       try {
-        return await this.runAttempt(request, runDirectory, summary, attempt, options.signal, options.onUpdate);
+        return await this.runAttempt(request, runDirectory, detail, attempt, options.signal, options.onUpdate);
       } catch (error) {
         lastError = error;
         if (options.signal?.aborted || attempt === attempts) break;
-        await this.appendEvent(runDirectory, { type: "retry", attempt: attempt + 1 });
+        this.recordEvent(detail, runDirectory, {
+          timestamp: new Date().toISOString(),
+          attempt: attempt + 1,
+          type: "retry",
+          message: `Retrying ${options.profile.id} (attempt ${attempt + 1})`,
+        }, options.onUpdate);
       }
     }
-    summary.state = options.signal?.aborted ? "aborted" : "failed";
-    summary.endedAt = new Date().toISOString();
-    summary.error = lastError instanceof Error ? lastError.message : String(lastError);
-    await this.saveSummary(runDirectory, summary);
+    detail.state = options.signal?.aborted ? "aborted" : "failed";
+    detail.endedAt = new Date().toISOString();
+    detail.error = lastError instanceof Error ? lastError.message : String(lastError);
+    this.recordEvent(detail, runDirectory, {
+      timestamp: detail.endedAt,
+      attempt: lastAttempt,
+      type: "error",
+      state: detail.state,
+      message: detail.error,
+    }, options.onUpdate);
+    await this.saveSummary(runDirectory, detail);
     throw lastError;
   }
 
   private async runAttempt(
     request: ChildRequest,
     runDirectory: string,
-    summary: RunSummary,
+    detail: RunDetail,
     attempt: number,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback,
@@ -106,6 +142,8 @@ export class SubagentManager {
     let finalResult: Extract<ChildEvent, { type: "result" }> | undefined;
     let childError: string | undefined;
     let timedOut = false;
+    let reportedReasoning = false;
+    let reportedWriting = false;
 
     const abort = () => this.terminate(child);
     const timeout = setTimeout(() => {
@@ -124,18 +162,39 @@ export class SubagentManager {
         if (!line.trim()) continue;
         try {
           const event = JSON.parse(line) as ChildEvent;
-          void this.appendEvent(runDirectory, { attempt, ...event, messages: undefined });
           if (event.type === "status") {
-            summary.state = event.state;
-            onUpdate?.({ content: [{ type: "text", text: event.message }], details: { runId: request.runId, state: event.state } });
+            detail.state = event.state;
+            this.recordEvent(detail, runDirectory, {
+              timestamp: new Date().toISOString(), attempt, type: "status", state: event.state, message: event.message,
+            }, onUpdate);
+          } else if (event.type === "thinking_delta" && !reportedReasoning) {
+            reportedReasoning = true;
+            this.recordEvent(detail, runDirectory, {
+              timestamp: new Date().toISOString(), attempt, type: "reasoning", state: "running", message: "Analyzing task",
+            }, onUpdate);
           } else if (event.type === "text_delta") {
-            onUpdate?.({ content: [{ type: "text", text: `${request.profile.id}: working…` }], details: { runId: request.runId, state: "running", recent: event.delta } });
+            if (!reportedWriting) {
+              reportedWriting = true;
+              this.recordEvent(detail, runDirectory, {
+                timestamp: new Date().toISOString(), attempt, type: "writing", state: "running", message: "Writing response",
+              }, onUpdate);
+            }
           } else if (event.type === "tool_start") {
-            onUpdate?.({ content: [{ type: "text", text: `${request.profile.id}: running ${event.name}` }], details: { runId: request.runId, state: "running", tool: event.name } });
+            this.recordEvent(detail, runDirectory, {
+              timestamp: new Date().toISOString(), attempt, type: "tool_start", state: "running", tool: event.name, args: event.args,
+            }, onUpdate);
+          } else if (event.type === "tool_end") {
+            this.recordEvent(detail, runDirectory, {
+              timestamp: new Date().toISOString(), attempt, type: "tool_end", state: "running", tool: event.name,
+              result: event.result, isError: event.isError,
+            }, onUpdate);
           } else if (event.type === "result") {
             finalResult = event;
           } else if (event.type === "error") {
             childError = event.message;
+            this.recordEvent(detail, runDirectory, {
+              timestamp: new Date().toISOString(), attempt, type: "error", message: `Attempt ${attempt} failed: ${event.message}`,
+            }, onUpdate);
           }
         } catch (error) {
           childError = `Invalid child event: ${error instanceof Error ? error.message : String(error)}`;
@@ -163,17 +222,41 @@ export class SubagentManager {
       "utf8",
     );
     await writeFile(path.join(runDirectory, "output.md"), finalResult.text, "utf8");
-    summary.state = "completed";
-    summary.endedAt = new Date().toISOString();
-    await this.saveSummary(runDirectory, summary);
+    detail.state = "completed";
+    detail.endedAt = new Date().toISOString();
+    detail.output = finalResult.text;
+    detail.value = finalResult.value;
+    this.recordEvent(detail, runDirectory, {
+      timestamp: detail.endedAt, attempt, type: "result", state: "completed", message: "Subagent completed",
+    }, onUpdate);
+    await this.saveSummary(runDirectory, detail);
     return { text: finalResult.text, value: finalResult.value, runId: request.runId };
+  }
+
+  private recordEvent(
+    detail: RunDetail,
+    runDirectory: string,
+    event: RunEvent,
+    onUpdate?: AgentToolUpdateCallback,
+  ): void {
+    detail.events.push(event);
+    void this.appendEvent(runDirectory, event);
+    const details: SubagentUpdateDetails = {
+      kind: "subagent",
+      runId: detail.id,
+      agent: detail.agent,
+      task: detail.task,
+      event,
+    };
+    onUpdate?.({ content: [{ type: "text", text: event.message ?? `${detail.agent}: ${event.type}` }], details });
   }
 
   private async appendEvent(runDirectory: string, event: unknown): Promise<void> {
     await appendFile(path.join(runDirectory, "events.jsonl"), `${JSON.stringify({ timestamp: new Date().toISOString(), ...event as object })}\n`, "utf8");
   }
 
-  private async saveSummary(runDirectory: string, summary: RunSummary): Promise<void> {
+  private async saveSummary(runDirectory: string, detail: RunDetail): Promise<void> {
+    const { events: _events, output: _output, value: _value, model: _model, thinking: _thinking, ...summary } = detail;
     await writeFile(path.join(runDirectory, "status.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   }
 

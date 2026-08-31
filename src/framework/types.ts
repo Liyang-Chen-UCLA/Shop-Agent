@@ -88,10 +88,52 @@ export type LoadedSession = {
 export type RunSummary = {
   id: string;
   agent: string;
+  task: string;
   state: "starting" | "running" | "completed" | "failed" | "aborted";
   startedAt: string;
   endedAt?: string;
   error?: string;
+};
+
+export type RunEvent = {
+  timestamp: string;
+  attempt: number;
+  type: "status" | "reasoning" | "writing" | "tool_start" | "tool_end" | "retry" | "result" | "error";
+  state?: RunSummary["state"];
+  message?: string;
+  tool?: string;
+  args?: unknown;
+  result?: unknown;
+  isError?: boolean;
+};
+
+export type RunDetail = RunSummary & {
+  model: string;
+  thinking: ThinkingLevel;
+  events: RunEvent[];
+  output?: string;
+  value?: unknown;
+};
+
+export type SubagentUpdateDetails = {
+  kind: "subagent";
+  runId: string;
+  agent: string;
+  task: string;
+  event: RunEvent;
+};
+
+export type ProductTask = {
+  task_id: string;
+  product: string;
+  preference: Record<string, string | number | boolean | Array<string | number | boolean>>;
+  route: { node_id: string; node_name: string; node_path: string };
+};
+
+export type TaskState = {
+  schema_version: 1;
+  active_task_id: string | null;
+  tasks: ProductTask[];
 };
 
 export type ShopAgentEvent =

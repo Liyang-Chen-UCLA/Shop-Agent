@@ -9,6 +9,7 @@ import { createPythonAgentTools, discoverPythonTools } from "../src/framework/py
 import { validateJsonSchema } from "../src/framework/schema.ts";
 import { SessionStore } from "../src/framework/session-store.ts";
 import { createShopAgent } from "../src/framework/shop-agent.ts";
+import { renderRunCard, renderTaskState, summarizeValue } from "../src/tui/presentation.ts";
 
 const cwd = path.resolve(import.meta.dirname, "..");
 
@@ -39,6 +40,47 @@ test("validates the JSON Schema subset used by tool manifests", () => {
   assert.deepEqual(validateJsonSchema(schema, { name: "item", count: 2 }), { valid: true });
   assert.equal(validateJsonSchema(schema, { count: 2 }).valid, false);
   assert.equal(validateJsonSchema(schema, { name: "item", extra: true }).valid, false);
+});
+
+test("formats safe TUI summaries, run cards, and task state", () => {
+  assert.equal(
+    summarizeValue({ query: "手机", authorization: "Bearer secret", nested: { apiToken: "hidden" } }),
+    '{"query":"手机","authorization":"[REDACTED]","nested":{"apiToken":"[REDACTED]"}}',
+  );
+  assert.equal(summarizeValue({ text: '{"password":"nested-secret"}' }), '{"text":{"password":"[REDACTED]"}}');
+  const card = renderRunCard({
+    id: "12345678-aaaa-bbbb-cccc-dddddddddddd",
+    agent: "route_agent",
+    task: "定位无锁手机分类",
+    state: "completed",
+    startedAt: "2026-08-29T00:00:00.000Z",
+    endedAt: "2026-08-29T00:00:01.500Z",
+    events: [{
+      timestamp: "2026-08-29T00:00:01.000Z",
+      attempt: 1,
+      type: "tool_start",
+      tool: "taxonomy_search_nodes",
+      args: { queries: ["手机"], api_key: "do-not-render" },
+    }],
+  });
+  assert.match(card, /route\\_agent/);
+  assert.match(card, /taxonomy_search_nodes/);
+  assert.match(card, /\[REDACTED\]/);
+  assert.doesNotMatch(card, /do-not-render/);
+
+  const state = renderTaskState({
+    schema_version: 1,
+    active_task_id: "task-1",
+    tasks: [{
+      task_id: "task-1",
+      product: "无锁手机",
+      preference: { 最高价格: 6000 },
+      route: { node_id: "543514", node_name: "无锁手机", node_path: "电子产品 > 手机 > 无锁手机" },
+    }],
+  }, false);
+  assert.match(state, /Active task/);
+  assert.match(state, /无锁手机/);
+  assert.match(state, /最高价格/);
 });
 
 test("runs a manifest-based Python tool without leaking OPENCODE_API_KEY", async () => {
@@ -202,8 +244,8 @@ test("creates an interactive orchestrator with state tools and focused subagents
     const agents = JSON.parse((result.content[0] as { text: string }).text) as { id: string }[];
     assert.deepEqual(agents.map((agent) => agent.id), ["route_agent", "product_analyst", "delegate"]);
 
-    const state = await app.agent.state.tools[0].execute("state-call", {});
-    assert.deepEqual(JSON.parse((state.content[0] as { text: string }).text).state.tasks, []);
+    const state = await app.getTaskState();
+    assert.deepEqual(state.tasks, []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

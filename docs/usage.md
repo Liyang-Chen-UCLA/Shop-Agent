@@ -47,11 +47,14 @@ The Python business tools require the packages pinned in `shop/requirements.txt`
 - `/thinking <level>` changes orchestrator reasoning.
 - `/thinking <agent> <level>` overrides a subagent.
 - `/agents` lists configured profiles and their tool allowlists.
-- `/runs` lists subagent runs created in the current process.
+- `/runs` opens a picker for subagent runs created in the current process; `/runs <id>` opens the full execution timeline.
+- `/tasks` shows the active product-analysis task; `/tasks all` shows every task in the current session.
 - `/abort` cancels the current model, subagent, or Python tool run.
 - `/exit` saves and exits.
 
 Pressing `Ctrl+C` aborts active work. Pressing it while idle exits.
+
+Foreground subagent work appears inline as a persistent execution card. The card shows the delegated task, progress stages, tool arguments and result summaries, completion state, and elapsed time. Sensitive-looking fields are redacted and long summaries are truncated. Full run details intentionally omit raw reasoning text; use the arrow, Page Up/Down, Home, and End keys to scroll their overlay.
 
 ## Project layout
 
