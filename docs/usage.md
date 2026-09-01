@@ -14,6 +14,37 @@ The direct equivalent is:
 node src/cli.ts
 ```
 
+Run the fixed three-turn phone workflow (create a task, update a preference,
+then refine the route to unlocked phones) with the same app instance for every
+turn:
+
+```powershell
+$env:SHOP_AGENT_PYTHON = "D:\App\miniforge3\envs\shop-agent\python.exe"
+node src/cli.ts --multi-turn-test
+```
+
+This mode requires `OPENCODE_API_KEY`, the configured Python environment, and
+the normal taxonomy tools because it exercises the real model chain. It emits
+one JSON Lines record per turn containing the user input, final assistant text,
+and `app.getTaskState()` result. The offline node:test fake-app coverage does
+not create a model or require credentials.
+
+Run the backend environment workflow for dog food, table-tennis paddles, and
+phone fill lights. It preflights the trusted `task_state_upsert` and
+`shopping_env` tools in isolated UUID contexts, then sends the same three
+category prompts through one real app instance and verifies the published
+market artifacts:
+
+```powershell
+$env:SHOP_AGENT_PYTHON = "D:\App\miniforge3\envs\shop-agent\python.exe"
+node src/cli.ts --backend-env-test
+```
+
+The backend-env mode also requires `OPENCODE_API_KEY` and the configured
+product dataset. Its JSON Lines output includes only each environment sample's
+category, item id, rank, and sample index (never the full OCR text). A missing
+or mismatched market artifact causes a non-zero exit.
+
 Validate configuration, authentication visibility, profiles, model metadata, Python, and tool manifests without opening the TUI:
 
 ```powershell

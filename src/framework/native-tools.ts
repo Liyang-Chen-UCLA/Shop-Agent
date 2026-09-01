@@ -44,6 +44,8 @@ export type NativeToolFactoryOptions = {
   projectRoot: string;
   getRuntimeContext: () => NativeToolRuntimeContext;
   webSearchPrompt?: string;
+  /** Criteria keeps its bounded policy; market alignment intentionally has no numeric cap. */
+  webSearchPolicy?: "criteria" | "market";
 };
 
 export type NativeAgentToolSet = {
@@ -170,7 +172,7 @@ function createSearchTool(
     async execute(_toolCallId, params) {
       const query = typeof params.query === "string" ? params.query.trim() : "";
       if (!query) throw new Error("web_search requires a non-empty query.");
-      if (searchStats.attempted >= MAX_CRITERIA_SEARCH_QUERIES) {
+      if (options.webSearchPolicy !== "market" && searchStats.attempted >= MAX_CRITERIA_SEARCH_QUERIES) {
         throw new Error(`web_search allows at most ${MAX_CRITERIA_SEARCH_QUERIES} queries in one criteria run.`);
       }
       searchStats.attempted += 1;

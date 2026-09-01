@@ -67,6 +67,37 @@ test("validates the JSON Schema subset used by tool manifests", () => {
   assert.equal(validateJsonSchema(schema, { name: "item", extra: true }).valid, false);
 });
 
+test("reports actionable branch paths when an anyOf value matches no candidate", () => {
+  const schema = {
+    anyOf: [
+      {
+        type: "object",
+        properties: { kind: { const: "numeric" }, amount: { type: "number" } },
+        required: ["kind", "amount"],
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: { kind: { const: "categorical" }, values: { type: "array" } },
+        required: ["kind", "values"],
+        additionalProperties: false,
+      },
+    ],
+  };
+
+  const missing = validateJsonSchema(schema, { kind: "numeric" });
+  assert.equal(missing.valid, false);
+  assert.match((missing as { error: string }).error, /does not match any allowed schema/);
+  assert.match((missing as { error: string }).error, /option 1: \$\.amount is required/);
+  assert.match((missing as { error: string }).error, /option 2: \$\.values is required/);
+
+  const extra = validateJsonSchema(schema, { kind: "numeric", amount: 1, values: [], extra: true });
+  assert.equal(extra.valid, false);
+  assert.match((extra as { error: string }).error, /option 1: \$\.values is not allowed/);
+  assert.match((extra as { error: string }).error, /option 2: \$\.kind must equal its configured constant/);
+  assert.ok((extra as { error: string }).error.length <= 1_000);
+});
+
 test("truncates native search output at a safe boundary", () => {
   const result = truncateSearchResult("a".repeat(SEARCH_RESULT_MAX_CHARS + 50));
   assert.equal(result.length, SEARCH_RESULT_MAX_CHARS);
@@ -127,6 +158,41 @@ test("output validation controller steers one repair and never succeeds after a 
   assert.equal(failedSteers.length, 1);
   assert.equal(failed.state.validationSucceeded, false);
   assert.match(failed.state.terminalError ?? "", /validation failed/);
+});
+
+test("invalid JSON diagnostics expose only stop reason and character count", async () => {
+  const profile = {
+    id: "market_agent",
+    role: "subagent",
+    description: "",
+    systemPrompt: "",
+    outputSchema: { type: "object", properties: {}, additionalProperties: false },
+    outputValidator: { id: "fake", maxOutputRepairs: 1 },
+  } as never;
+  const candidateSecret = "OCR-CANDIDATE-SECRET-avoid-leaking";
+  const turn = (text: string, stopReason: string) => ({
+    message: { role: "assistant", content: [{ type: "text", text }], stopReason },
+  } as never);
+  const steers: any[] = [];
+  const controller = createOutputValidationController({
+    profile,
+    python: { executable: pythonExecutable, timeoutMs: 10_000, envAllowlist: [] },
+    projectRoot: cwd,
+    steer: (message) => steers.push(message),
+    validateTrusted: async () => ({ valid: true }),
+  });
+
+  assert.equal(await controller.shouldStopAfterTurn(turn(candidateSecret, "length")), false);
+  const steerText = steers[0].content[0].text as string;
+  assert.match(steerText, /stop_reason=length/);
+  assert.match(steerText, /chars=\d+/);
+  assert.equal(steerText.includes(candidateSecret), false);
+
+  assert.equal(await controller.shouldStopAfterTurn(turn(candidateSecret, "stop")), true);
+  const terminalError = controller.state.terminalError ?? "";
+  assert.match(terminalError, /stop_reason=stop/);
+  assert.match(terminalError, /chars=\d+/);
+  assert.equal(terminalError.includes(candidateSecret), false);
 });
 
 test("diagnostic events and persisted messages are redacted without breaking tool pairing", () => {

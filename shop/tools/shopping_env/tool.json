@@ -1,0 +1,24 @@
+{
+  "name": "shopping_env",
+  "description": "Read the next deterministic product OCR context for the active mapped category. This tool accepts no arguments: call with {} until sample_index equals sample_limit (5), then copy the returned dataset_category exactly, which may differ from the taxonomy node name.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "dataset_category": { "type": "string", "description": "Trusted dataset category to copy verbatim into the market document and every product entry; do not replace with taxonomy node name." },
+      "sample_index": { "type": "integer", "description": "One-based number of distinct products selected so far; keep calling with {} until this equals sample_limit." },
+      "sample_limit": { "type": "integer", "description": "Trusted required distinct-product count; final output must cover exactly this many products." },
+      "item_id": { "type": "string" },
+      "category": { "type": "string" },
+      "rank": { "type": ["integer", "null"] },
+      "ocr_text": { "type": "string" }
+    },
+    "required": ["dataset_category", "sample_index", "sample_limit", "item_id", "category", "rank", "ocr_text"],
+    "additionalProperties": false
+  }
+}

@@ -10,5 +10,8 @@ export function composeSystemPrompt(profile: ResolvedAgentProfile): string {
   const outputRule = profile.outputSchema
     ? "\n\nReturn only valid JSON matching the configured output schema. Do not wrap it in Markdown fences."
     : "";
-  return `${FRAMEWORK_INVARIANTS}\n\n${profile.systemPrompt.trim()}${outputRule}`;
+  const skill = profile.skillPrompt?.trim()
+    ? `\n\nLoaded repo skill:\n${profile.skillPrompt.trim()}`
+    : "";
+  return `${FRAMEWORK_INVARIANTS}\n\n${profile.systemPrompt.trim()}${skill}${outputRule}`;
 }

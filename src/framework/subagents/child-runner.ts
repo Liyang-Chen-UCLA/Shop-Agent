@@ -28,11 +28,20 @@ async function main(): Promise<void> {
   const definitions = new Map(request.tools.map((tool) => [tool.name, tool]));
   const allowlist = request.profile.tools ?? [];
   const pythonAllowlist = allowlist.filter((name) => definitions.has(name));
-  const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, request.python);
+  const runtimeContext = () => ({
+    sessionId: request.sessionId,
+    dataDirectory: request.dataDirectory,
+    runId: request.runId,
+    datasetPath: request.datasetPath,
+    maxDistinctProducts: request.maxDistinctProducts,
+    agentName: request.profile.id,
+  });
+  const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, request.python, runtimeContext);
   const nativeToolSet = createNativeAgentToolSet(allowlist, {
     runtime,
     projectRoot: request.projectRoot,
     getRuntimeContext: () => ({ sessionId: request.sessionId, agentName: request.profile.id, projectRoot: request.projectRoot }),
+    webSearchPolicy: request.profile.webSearchPolicy ?? (request.profile.id === "market_agent" ? "market" : "criteria"),
   });
   const tools = [...pythonTools, ...nativeToolSet.tools];
   let agent: Agent;
@@ -40,6 +49,11 @@ async function main(): Promise<void> {
     profile: request.profile,
     python: request.python,
     projectRoot: request.projectRoot,
+    runtimeContext: () => ({
+      ...runtimeContext(),
+      operation: request.profile.id === "market_agent" ? "publish_market" : undefined,
+      searchStats: nativeToolSet.searchStats,
+    }),
     steer: (message) => agent.steer(message),
   });
   agent = new Agent({

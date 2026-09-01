@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -15,6 +15,7 @@ import type {
 } from "../types.ts";
 import { DEVELOPER_ISSUE_TOOL, isNativeToolName, WEB_SEARCH_TOOL } from "../native-tools.ts";
 import { sanitizeDeveloperDiagnosticMessages } from "../content.ts";
+import { validateWithTrustedValidator } from "../output-validator.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 
 type AgentOverride = { model?: string; thinking?: ThinkingLevel };
@@ -60,6 +61,13 @@ export class SubagentManager {
   }
 
   async run(options: RunOptions): Promise<RunResult> {
+    if (options.profile.id === "criteria_agent") {
+      return this.runCriteriaAndMarket(options);
+    }
+    return this.runSingle(options);
+  }
+
+  private async runSingle(options: RunOptions): Promise<RunResult> {
     const runId = randomUUID();
     const detail: RunDetail = {
       id: runId,
@@ -87,6 +95,9 @@ export class SubagentManager {
       runId,
       sessionId: options.sessionId ?? runId,
       projectRoot: this.config.cwd,
+      dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
+      datasetPath: path.resolve(this.config.cwd, this.config.datasetPath),
+      maxDistinctProducts: this.config.maxDistinctProducts,
       task: options.task,
       profile: options.profile,
       model: detail.model,
@@ -125,6 +136,106 @@ export class SubagentManager {
     }, options.onUpdate);
     await this.saveSummary(runDirectory, detail);
     throw lastError;
+  }
+
+  private routeFromTask(task: string): { node_id: string; node_name: string; node_path: string } | undefined {
+    let value: unknown;
+    try {
+      value = JSON.parse(task);
+    } catch {
+      return undefined;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    const route = record.route && typeof record.route === "object" && !Array.isArray(record.route)
+      ? record.route as Record<string, unknown>
+      : record;
+    if (typeof route.node_id !== "string" || typeof route.node_name !== "string" || typeof route.node_path !== "string") {
+      return undefined;
+    }
+    if (!/^\d+$/.test(route.node_id) || !route.node_name.trim() || !route.node_path.trim()) return undefined;
+    return { node_id: route.node_id, node_name: route.node_name.trim(), node_path: route.node_path.trim() };
+  }
+
+  private artifactDirectory(): string {
+    return path.resolve(this.config.cwd, this.config.dataDirectory, "market-criteria");
+  }
+
+  private async cachedMarket(task: string): Promise<RunResult | undefined> {
+    const route = this.routeFromTask(task);
+    if (!route) return undefined;
+    const marketPath = path.join(this.artifactDirectory(), route.node_id, "market.json");
+    try {
+      const text = await readFile(marketPath, "utf8");
+      const value = JSON.parse(text) as unknown;
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("market artifact is not a JSON object");
+      return { text: JSON.stringify(value), value, runId: `cached-${randomUUID()}` };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      if (error instanceof SyntaxError) throw new Error(`Cached market artifact is invalid: ${marketPath}`);
+      throw error;
+    }
+  }
+
+  private async hasBase(task: string): Promise<boolean> {
+    const route = this.routeFromTask(task);
+    if (!route) return false;
+    try {
+      await access(path.join(this.artifactDirectory(), route.node_id, "base.json"));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  private marketTask(task: string): string {
+    const route = this.routeFromTask(task);
+    if (!route) return task;
+    return JSON.stringify(route);
+  }
+
+  private async persistBaseCriteria(result: RunResult, sessionId: string, runId: string): Promise<void> {
+    if (result.value === undefined) throw new Error("criteria_agent returned no structured result to persist as base criteria");
+    const validation = await validateWithTrustedValidator(
+      { id: "market_v1" },
+      result.value,
+      this.config.python,
+      this.config.cwd,
+      undefined,
+      {
+        operation: "persist_base",
+        sessionId,
+        runId,
+        dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
+        datasetPath: path.resolve(this.config.cwd, this.config.datasetPath),
+        maxDistinctProducts: this.config.maxDistinctProducts,
+        agentName: "criteria_agent",
+      },
+    );
+    if (!validation.valid) throw new Error(`Base criteria persistence failed: ${validation.error}`);
+  }
+
+  private async runCriteriaAndMarket(options: RunOptions): Promise<RunResult> {
+    const marketProfile = this.config.agents.find((profile) => profile.id === "market_agent");
+    if (!marketProfile) return this.runSingle(options);
+    const cached = await this.cachedMarket(options.task);
+    if (cached) return cached;
+    const sessionId = options.sessionId ?? "unknown-session";
+    if (await this.hasBase(options.task)) {
+      return this.runSingle({
+        ...options,
+        profile: marketProfile,
+        task: this.marketTask(options.task),
+      });
+    }
+    const criteria = await this.runSingle(options);
+    await this.persistBaseCriteria(criteria, sessionId, criteria.runId);
+    return this.runSingle({
+      ...options,
+      profile: marketProfile,
+      task: this.marketTask(options.task),
+    });
   }
 
   private async runAttempt(

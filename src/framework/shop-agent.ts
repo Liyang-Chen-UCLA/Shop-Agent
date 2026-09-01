@@ -126,6 +126,9 @@ export class ShopAgent {
       () => ({
         sessionId: this.session.metadata.id,
         dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
+        datasetPath: path.resolve(this.config.cwd, this.config.datasetPath),
+        maxDistinctProducts: this.config.maxDistinctProducts,
+        agentName: profile.id,
       }),
     );
     const nativeTools = createNativeAgentToolSet(allowlist, {

@@ -14,6 +14,10 @@ export type AgentProfile = {
   role: "orchestrator" | "subagent";
   description: string;
   systemPrompt: PromptSource;
+  /** Optional repo-local skill instructions explicitly loaded into this profile. */
+  skill?: PromptSource;
+  /** Search policy for the profile's native web_search tool. */
+  webSearchPolicy?: "criteria" | "market";
   model?: ModelChoice;
   thinking?: ThinkingLevel;
   tools?: string[];
@@ -46,6 +50,8 @@ export type ShopAgentConfig = {
   toolDirectories: string[];
   python: PythonConfig;
   dataDirectory: string;
+  datasetPath: string;
+  maxDistinctProducts: number;
 };
 
 export type ShopAgentConfigInput = Partial<Omit<ShopAgentConfig, "python">> & {
@@ -54,6 +60,7 @@ export type ShopAgentConfigInput = Partial<Omit<ShopAgentConfig, "python">> & {
 
 export type ResolvedAgentProfile = Omit<AgentProfile, "systemPrompt"> & {
   systemPrompt: string;
+  skillPrompt?: string;
 };
 
 export type ResolvedConfig = Omit<ShopAgentConfig, "agents"> & {
@@ -77,6 +84,14 @@ export type PythonToolDefinition = {
 export type PythonToolRuntimeContext = {
   sessionId: string;
   dataDirectory: string;
+  /** Trusted child-run identity used by one-shot, per-run shopping cursors. */
+  runId?: string;
+  /** Trusted configured dataset path; never model-authored. */
+  datasetPath?: string;
+  /** Trusted configured sample cap; never model-authored. */
+  maxDistinctProducts?: number;
+  /** Optional trusted agent label for narrow diagnostics. */
+  agentName?: string;
 };
 
 export type NativeToolRuntimeContext = {

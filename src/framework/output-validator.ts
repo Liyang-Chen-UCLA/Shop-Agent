@@ -9,8 +9,11 @@ export type TrustedValidationResult =
   | { valid: true; value?: unknown }
   | { valid: false; error: string };
 
+export type TrustedValidatorContext = Record<string, unknown>;
+
 const VALIDATOR_ENTRIES: Readonly<Record<string, string>> = {
   criteria_v1: path.join("shop", "criteria_contract.py"),
+  market_v1: path.join("shop", "market_contract.py"),
 };
 
 function terminate(child: ChildProcessWithoutNullStreams): void {
@@ -38,6 +41,7 @@ export async function validateWithTrustedValidator(
   python: PythonConfig,
   projectRoot: string,
   signal?: AbortSignal,
+  context?: TrustedValidatorContext,
 ): Promise<TrustedValidationResult> {
   const entry = VALIDATOR_ENTRIES[validator.id];
   if (!entry) return { valid: false, error: `Unknown trusted output validator '${validator.id}'.` };
@@ -110,11 +114,10 @@ export async function validateWithTrustedValidator(
       if (response.ok === true) finish({ valid: true, value: response.result });
       else finish({ valid: false, error: validationError(response.error?.message ?? "Trusted validator rejected output.") });
     });
-    child.stdin.end(JSON.stringify({ value }) + "\n");
+    child.stdin.end(JSON.stringify({ value, context: context ?? {} }) + "\n");
   });
 }
 
 export function listTrustedOutputValidators(): string[] {
   return Object.keys(VALIDATOR_ENTRIES);
 }
-

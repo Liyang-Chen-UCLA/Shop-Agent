@@ -24,10 +24,19 @@ export function createDelegationTool(
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate) {
       if (params.action === "list") {
-        const result = subagents.map(({ id, description }) => ({ id, description }));
+        // market_agent is an internal second stage of criteria_agent.  It is
+        // configured and inspectable by the trusted framework, but not a
+        // separate orchestrator choice; exposing it here would let a model
+        // bypass the criteria -> market cache/persistence chain.
+        const result = subagents
+          .filter((profile) => profile.id !== "market_agent")
+          .map(({ id, description }) => ({ id, description }));
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: { action: "list" } };
       }
       if (!params.agent) throw new Error(`delegate_agent action '${params.action}' requires 'agent'.`);
+      if (params.agent === "market_agent" && (params.action === "get" || params.action === "run")) {
+        throw new Error("market_agent is an internal stage and cannot be delegated directly.");
+      }
       const profile = subagents.find((item) => item.id === params.agent);
       if (!profile) throw new Error(`Unknown subagent: ${params.agent}`);
       if (params.action === "get") {

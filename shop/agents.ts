@@ -90,6 +90,106 @@ export const criteriaOutputSchema = {
   additionalProperties: false,
 };
 
+const marketNodeSchema = {
+  type: "object",
+  properties: { id: { type: "string" }, name: { type: "string" }, path: { type: "array", items: { type: "string" } } },
+  required: ["id", "name", "path"],
+  additionalProperties: false,
+};
+const marketMetadataProperties = {
+  observed_product_count: { type: "integer" },
+  market_alignment: { type: "string", enum: ["matched", "corrected_from_conflict", "added_from_market"] },
+  web_evidence: {
+    type: "array",
+    items: { anyOf: [{ type: "string" }, { type: "object" }] },
+  },
+};
+const marketNumericCriterionSchema = {
+  type: "object",
+  properties: { ...commonItemProperties, type: { const: "numeric" }, units: { type: "array", items: { type: "string" } }, formula: { type: ["string", "null"] }, direction: numericDirectionSchema, ...marketMetadataProperties },
+  required: ["id", "name", "description", "aliases", "type", "units", "direction", "observed_product_count", "market_alignment", "web_evidence"],
+  additionalProperties: false,
+};
+const marketBooleanCriterionSchema = {
+  type: "object",
+  properties: { ...commonItemProperties, type: { const: "boolean" }, direction: booleanDirectionSchema, ...marketMetadataProperties },
+  required: ["id", "name", "description", "aliases", "type", "direction", "observed_product_count", "market_alignment", "web_evidence"],
+  additionalProperties: false,
+};
+const marketCategoricalCriterionSchema = {
+  type: "object",
+  properties: { ...commonItemProperties, type: { const: "categorical" }, values: { type: "array", items: { type: "string" } }, value_domain: { type: "string", enum: ["open", "closed"] }, direction: categoricalDirectionSchema, ...marketMetadataProperties },
+  required: ["id", "name", "description", "aliases", "type", "values", "value_domain", "direction", "observed_product_count", "market_alignment", "web_evidence"],
+  additionalProperties: false,
+};
+const marketNumericAttributeSchema = {
+  type: "object",
+  properties: { ...commonItemProperties, type: { const: "numeric" }, units: { type: "array", items: { type: "string" } }, formula: { type: ["string", "null"] }, ...marketMetadataProperties },
+  required: ["id", "name", "description", "aliases", "type", "units", "observed_product_count", "market_alignment", "web_evidence"],
+  additionalProperties: false,
+};
+const marketBooleanAttributeSchema = {
+  type: "object",
+  properties: { ...commonItemProperties, type: { const: "boolean" }, ...marketMetadataProperties },
+  required: ["id", "name", "description", "aliases", "type", "observed_product_count", "market_alignment", "web_evidence"],
+  additionalProperties: false,
+};
+const marketCategoricalAttributeSchema = {
+  type: "object",
+  properties: { ...commonItemProperties, type: { const: "categorical" }, values: { type: "array", items: { type: "string" } }, value_domain: { type: "string", enum: ["open", "closed"] }, ...marketMetadataProperties },
+  required: ["id", "name", "description", "aliases", "type", "values", "value_domain", "observed_product_count", "market_alignment", "web_evidence"],
+  additionalProperties: false,
+};
+const marketValueSchema = {
+  type: "object",
+  properties: {
+    raw_value: { type: "string" },
+    normalized_value: { type: ["string", "number", "boolean", "null"] },
+    unit: { type: ["string", "null"] },
+    qualifier: { type: ["string", "null"] },
+    evidence: { type: ["string", "null"] },
+    ocr_page_id: { type: ["string", "null"] },
+  },
+  required: ["raw_value", "normalized_value"],
+  additionalProperties: false,
+};
+const marketExtractionSchema = {
+  type: "object",
+  properties: {
+    item_id: { type: "string" },
+    status: { type: "string", enum: ["observed", "unparsed", "not_mentioned"] },
+    values: { type: "array", items: marketValueSchema },
+  },
+  required: ["item_id", "status", "values"],
+  additionalProperties: false,
+};
+const marketProductSchema = {
+  type: "object",
+  properties: {
+    dataset_category: { type: "string" },
+    item_id: { type: "string" },
+    criteria: { type: "array", items: marketExtractionSchema },
+    attributes: { type: "array", items: marketExtractionSchema },
+  },
+  required: ["dataset_category", "item_id", "criteria", "attributes"],
+  additionalProperties: false,
+};
+
+export const marketOutputSchema = {
+  type: "object",
+  properties: {
+    node: marketNodeSchema,
+    dataset_category: { type: "string" },
+    traversed_product_count: { type: "integer" },
+    product_ids: { type: "array", items: { type: "string" } },
+    criteria: { type: "array", items: { anyOf: [marketNumericCriterionSchema, marketBooleanCriterionSchema, marketCategoricalCriterionSchema] } },
+    attributes: { type: "array", items: { anyOf: [marketNumericAttributeSchema, marketBooleanAttributeSchema, marketCategoricalAttributeSchema] } },
+    products: { type: "array", items: marketProductSchema },
+  },
+  required: ["node", "dataset_category", "traversed_product_count", "product_ids", "criteria", "attributes", "products"],
+  additionalProperties: false,
+};
+
 export const agents: AgentProfile[] = [
   {
     id: "orchestrator",
@@ -103,6 +203,8 @@ export const agents: AgentProfile[] = [
     role: "subagent",
     description: "Maps normalized product names to canonical taxonomy nodes and discloses direct child categories.",
     systemPrompt: { file: "./shop/prompts/route-agent.md" },
+    model: { provider: "opencode-go", id: "gpt-5.6-luna" },
+    thinking: "low",
     tools: ["taxonomy_search_nodes", "taxonomy_get_nodes", "taxonomy_get_children", "report_developer_issue"],
     outputSchema: {
       type: "object",
@@ -136,6 +238,22 @@ export const agents: AgentProfile[] = [
     tools: ["web_search", "report_developer_issue"],
     outputSchema: criteriaOutputSchema,
     outputValidator: { id: "criteria_v1", maxOutputRepairs: 1 },
+    timeoutMs: 600_000,
+    maxRetries: 0,
+  },
+  {
+    id: "market_agent",
+    role: "subagent",
+    description: "Aligns the trusted base contract with selected Taobao OCR contexts and extracts every final criterion and attribute.",
+    systemPrompt: { file: "./shop/prompts/market-agent.md" },
+    skill: { file: "./shop/skills/market-alignment/SKILL.md" },
+    model: { provider: "opencode-go", id: "gpt-5.6-luna" },
+    thinking: "medium",
+    tools: ["load_base", "shopping_env", "web_search", "report_developer_issue"],
+    webSearchPolicy: "market",
+    outputSchema: marketOutputSchema,
+    outputValidator: { id: "market_v1", maxOutputRepairs: 2 },
+    timeoutMs: 600_000,
     maxRetries: 0,
   },
   {

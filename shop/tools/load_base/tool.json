@@ -1,0 +1,20 @@
+{
+  "name": "load_base",
+  "description": "Load the trusted base criteria artifact for the active mapped taxonomy route.",
+  "entry": "main.py",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "node": { "type": "object" },
+      "criteria": { "type": "array" },
+      "attributes": { "type": "array" }
+    },
+    "required": ["node", "criteria", "attributes"],
+    "additionalProperties": false
+  }
+}

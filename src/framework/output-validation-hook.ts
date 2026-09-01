@@ -4,6 +4,8 @@ import { validateJsonSchema } from "./schema.ts";
 import { validateWithTrustedValidator, type TrustedValidationResult } from "./output-validator.ts";
 import type { PythonConfig, ResolvedAgentProfile } from "./types.ts";
 
+export type TrustedRuntimeContext = Record<string, unknown> | (() => Record<string, unknown>);
+
 export type OutputValidationControllerState = {
   repairCount: number;
   validationSucceeded: boolean;
@@ -16,11 +18,14 @@ export type OutputValidationControllerOptions = {
   python: PythonConfig;
   projectRoot: string;
   steer: (message: AgentMessage) => void;
+  /** Trusted context for validators; never sourced from model output. */
+  runtimeContext?: TrustedRuntimeContext;
   validateTrusted?: (
     validator: NonNullable<ResolvedAgentProfile["outputValidator"]>,
     value: unknown,
     python: PythonConfig,
     projectRoot: string,
+    runtimeContext?: Record<string, unknown>,
   ) => Promise<TrustedValidationResult>;
 };
 
@@ -28,6 +33,11 @@ export type OutputValidationController = {
   state: OutputValidationControllerState;
   shouldStopAfterTurn: (turn: ShouldStopAfterTurnContext) => Promise<boolean>;
 };
+
+function safeStopReason(turn: ShouldStopAfterTurnContext): string {
+  const reason = turn.message.stopReason;
+  return typeof reason === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(reason) ? reason : "unknown";
+}
 
 export function createOutputRepairMessage(error: string): AgentMessage {
   return {
@@ -42,8 +52,8 @@ export function createOutputRepairMessage(error: string): AgentMessage {
 
 export function createOutputValidationController(options: OutputValidationControllerOptions): OutputValidationController {
   const state: OutputValidationControllerState = { repairCount: 0, validationSucceeded: false };
-  const validator = options.validateTrusted ?? ((config, value, python, projectRoot) => (
-    validateWithTrustedValidator(config, value, python, projectRoot)
+  const validator = options.validateTrusted ?? ((config, value, python, projectRoot, runtimeContext) => (
+    validateWithTrustedValidator(config, value, python, projectRoot, undefined, runtimeContext)
   ));
   const maxRepairs = Math.max(0, Math.min(3, options.profile.outputValidator?.maxOutputRepairs ?? 0));
 
@@ -74,12 +84,15 @@ export function createOutputValidationController(options: OutputValidationContro
       try {
         candidate = JSON.parse(text);
       } catch {
-        return fail("$ must be valid JSON");
+        return fail(`$ must be valid JSON (stop_reason=${safeStopReason(turn)}, chars=${text.length})`);
       }
       const basic = validateJsonSchema(options.profile.outputSchema, candidate);
       if (!basic.valid) return fail(basic.error);
       if (options.profile.outputValidator) {
-        const trusted = await validator(options.profile.outputValidator, candidate, options.python, options.projectRoot);
+        const context = typeof options.runtimeContext === "function"
+          ? options.runtimeContext()
+          : options.runtimeContext;
+        const trusted = await validator(options.profile.outputValidator, candidate, options.python, options.projectRoot, context);
         if (!trusted.valid) return fail(trusted.error);
         state.validatedValue = trusted.value ?? candidate;
       } else {
@@ -94,4 +107,3 @@ export function createOutputValidationController(options: OutputValidationContro
 
   return { state, shouldStopAfterTurn };
 }
-

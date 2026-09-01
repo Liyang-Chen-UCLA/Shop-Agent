@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { createShopAgent } from "./framework/index.ts";
+import { formatBackendEnvTestTurn, runBackendEnvTest } from "./backend-env-test.ts";
+import { formatMultiTurnTestTurn, runMultiTurnTest } from "./multi-turn-test.ts";
 import { ShopAgentTui } from "./tui/tui.ts";
 
 function argument(name: string): string | undefined {
@@ -19,6 +21,24 @@ async function main(): Promise<void> {
     process.stdout.write(`Model: ${app.currentSession.model}\n`);
     process.stdout.write(`Agents: ${app.listAgents().map((agent) => agent.id).join(", ")}\n`);
     process.stdout.write(`Python: ${app.config.python.executable}\n`);
+    return;
+  }
+
+  if (process.argv.includes("--multi-turn-test")) {
+    await runMultiTurnTest(app, {
+      onTurn: (turn) => {
+        process.stdout.write(`${formatMultiTurnTestTurn(turn)}\n`);
+      },
+    });
+    return;
+  }
+
+  if (process.argv.includes("--backend-env-test")) {
+    await runBackendEnvTest(app, {
+      onTurn: (turn) => {
+        process.stdout.write(`${formatBackendEnvTestTurn(turn)}\n`);
+      },
+    });
     return;
   }
 

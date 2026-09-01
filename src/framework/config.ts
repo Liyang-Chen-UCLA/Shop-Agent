@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
   AgentProfile,
+  PromptSource,
   ResolvedAgentProfile,
   ResolvedConfig,
   ShopAgentConfig,
@@ -43,6 +44,8 @@ export const DEFAULT_CONFIG: ShopAgentConfig = {
     envAllowlist: [],
   },
   dataDirectory: ".shop-agent",
+  datasetPath: "F:\\Code\\taobao-product-context\\data\\products.parquet",
+  maxDistinctProducts: 5,
 };
 
 export function defineConfig(config: ShopAgentConfigInput): ShopAgentConfigInput {
@@ -73,18 +76,26 @@ function mergeConfig(input: ShopAgentConfigInput): ShopAgentConfig {
   };
 }
 
+async function resolvePromptSource(cwd: string, source: PromptSource): Promise<string> {
+  if (typeof source === "string") return source;
+  const promptPath = path.resolve(cwd, source.file);
+  return readFile(promptPath, "utf8");
+}
+
 async function resolveProfile(cwd: string, profile: AgentProfile): Promise<ResolvedAgentProfile> {
   let systemPrompt: string;
-  if (typeof profile.systemPrompt === "string") {
-    systemPrompt = profile.systemPrompt;
-  } else {
-    const promptPath = path.resolve(cwd, profile.systemPrompt.file);
-    systemPrompt = await readFile(promptPath, "utf8");
-  }
-  return { ...profile, systemPrompt };
+  systemPrompt = await resolvePromptSource(cwd, profile.systemPrompt);
+  const skillPrompt = profile.skill ? await resolvePromptSource(cwd, profile.skill) : undefined;
+  return { ...profile, systemPrompt, ...(skillPrompt === undefined ? {} : { skillPrompt }) };
 }
 
 function validateConfig(config: ShopAgentConfig): void {
+  if (!config.datasetPath || typeof config.datasetPath !== "string") {
+    throw new Error("datasetPath must be a non-empty string.");
+  }
+  if (!Number.isInteger(config.maxDistinctProducts) || config.maxDistinctProducts <= 0) {
+    throw new Error("maxDistinctProducts must be a positive integer.");
+  }
   const ids = new Set<string>();
   for (const profile of config.agents) {
     if (!profile.id.trim()) throw new Error("Agent profile id cannot be empty.");

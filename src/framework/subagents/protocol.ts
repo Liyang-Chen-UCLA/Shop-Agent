@@ -7,6 +7,12 @@ export type ChildRequest = {
   sessionId: string;
   /** Trusted project root; never supplied by the model. */
   projectRoot: string;
+  /** Trusted runtime data directory used by narrow persistence tools. */
+  dataDirectory: string;
+  /** Trusted configured parquet dataset, never model-authored. */
+  datasetPath: string;
+  /** Trusted configured cap for distinct sampled products. */
+  maxDistinctProducts: number;
   task: string;
   profile: ResolvedAgentProfile;
   model: string;

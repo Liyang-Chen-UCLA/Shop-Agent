@@ -48,6 +48,15 @@ Input (the runtime injects `context`; it is not supplied by the model):
 
 Python always starts in UTF-8 mode. State tools require the trusted session context; taxonomy and other stateless tools may ignore it.
 
+The market stage has two additional narrow tools. `load_base` reads only the
+base artifact for the trusted active mapped route. `shopping_env` accepts only
+`{}` and takes the next product in rank/item-id order. It has no input arguments
+for rereading or selecting an item; the trusted validator reads selected
+contexts internally.
+The trusted context supplies `datasetPath`, `maxDistinctProducts`, and a
+run id; the complete parquet `context_text` is returned as `ocr_text`.
+Sampling state is persisted under `.shop-agent/shopping-env/`.
+
 Success:
 
 ```json
