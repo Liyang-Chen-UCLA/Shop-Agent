@@ -13,6 +13,8 @@ import type {
   RunSummary,
   SubagentUpdateDetails,
 } from "../types.ts";
+import { DEVELOPER_ISSUE_TOOL, isNativeToolName, WEB_SEARCH_TOOL } from "../native-tools.ts";
+import { sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 
 type AgentOverride = { model?: string; thinking?: ThinkingLevel };
@@ -20,6 +22,7 @@ type AgentOverride = { model?: string; thinking?: ThinkingLevel };
 export type RunOptions = {
   profile: ResolvedAgentProfile;
   task: string;
+  sessionId?: string;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   override?: AgentOverride;
@@ -74,7 +77,7 @@ export class SubagentManager {
     await this.saveSummary(runDirectory, detail);
 
     const tools = (options.profile.tools ?? [])
-      .filter((name) => name !== "delegate_agent")
+      .filter((name) => name !== "delegate_agent" && !isNativeToolName(name))
       .map((name) => {
         const definition = this.toolDefinitions.get(name);
         if (!definition) throw new Error(`Subagent '${options.profile.id}' references unknown tool '${name}'.`);
@@ -82,6 +85,8 @@ export class SubagentManager {
       });
     const request: ChildRequest = {
       runId,
+      sessionId: options.sessionId ?? runId,
+      projectRoot: this.config.cwd,
       task: options.task,
       profile: options.profile,
       model: detail.model,
@@ -180,13 +185,18 @@ export class SubagentManager {
               }, onUpdate);
             }
           } else if (event.type === "tool_start") {
+            if (event.name === DEVELOPER_ISSUE_TOOL) continue;
             this.recordEvent(detail, runDirectory, {
               timestamp: new Date().toISOString(), attempt, type: "tool_start", state: "running", tool: event.name, args: event.args,
             }, onUpdate);
           } else if (event.type === "tool_end") {
+            if (event.name === DEVELOPER_ISSUE_TOOL) continue;
+            const result = event.name === WEB_SEARCH_TOOL
+              ? (event.isError ? "web_search failed" : "web_search completed")
+              : event.result;
             this.recordEvent(detail, runDirectory, {
               timestamp: new Date().toISOString(), attempt, type: "tool_end", state: "running", tool: event.name,
-              result: event.result, isError: event.isError,
+              result, isError: event.isError,
             }, onUpdate);
           } else if (event.type === "result") {
             finalResult = event;
@@ -218,7 +228,8 @@ export class SubagentManager {
 
     await writeFile(
       path.join(runDirectory, "transcript.jsonl"),
-      finalResult.messages.map((message) => JSON.stringify({ type: "message", message })).join("\n") + "\n",
+      sanitizeDeveloperDiagnosticMessages(finalResult.messages)
+        .map((message) => JSON.stringify({ type: "message", message })).join("\n") + "\n",
       "utf8",
     );
     await writeFile(path.join(runDirectory, "output.md"), finalResult.text, "utf8");

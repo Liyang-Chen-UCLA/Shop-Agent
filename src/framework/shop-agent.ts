@@ -1,10 +1,12 @@
-import { access } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Agent, type AgentEvent, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { loadConfig } from "./config.ts";
 import { checkOpenCodeAuth, createModelRuntime, type ModelRuntime } from "./model-runtime.ts";
 import { discoverPythonTools, createPythonAgentTools } from "./python-tools.ts";
+import { createNativeAgentToolSet, isNativeToolName } from "./native-tools.ts";
+import { isDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticMessages } from "./content.ts";
 import { SessionStore } from "./session-store.ts";
 import { Logger } from "./logger.ts";
 import { SubagentManager } from "./subagents/manager.ts";
@@ -23,6 +25,20 @@ import type {
 } from "./types.ts";
 
 type Listener = (event: ShopAgentEvent) => void | Promise<void>;
+
+async function verifyPythonExecutable(executable: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(executable, ["-c", "pass"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.once("error", (error) => reject(new Error("Python executable '" + executable + "' is not available: " + error.message)));
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error("Python executable '" + executable + "' exited with code " + code + " during startup check."));
+    });
+  });
+}
 
 export type CreateShopAgentOptions = {
   cwd?: string;
@@ -67,7 +83,7 @@ export class ShopAgent {
   static async create(options: CreateShopAgentOptions = {}): Promise<ShopAgent> {
     const cwd = path.resolve(options.cwd ?? process.cwd());
     const config = await loadConfig(cwd, options.configPath, options.config);
-    await access(config.python.executable);
+    await verifyPythonExecutable(config.python.executable);
     const runtime = createModelRuntime();
     if (!options.skipAuthCheck) await checkOpenCodeAuth(runtime);
     const defaultModel = runtime.getModel(config.defaultModel);
@@ -75,7 +91,7 @@ export class ShopAgent {
     const definitions = await discoverPythonTools(cwd, config.toolDirectories);
     for (const profile of config.agents) {
       for (const tool of profile.tools ?? []) {
-        if (tool !== "delegate_agent" && !definitions.has(tool)) {
+        if (tool !== "delegate_agent" && !definitions.has(tool) && !isNativeToolName(tool)) {
           throw new Error(`Agent '${profile.id}' references unknown Python tool '${tool}'.`);
         }
       }
@@ -102,18 +118,35 @@ export class ShopAgent {
     const model = this.runtime.getModel(session.metadata.model);
     this.runtime.ensureThinking(model, session.metadata.thinking);
     const allowlist = profile.tools ?? [];
-    const tools = createPythonAgentTools(
+    const pythonAllowlist = allowlist.filter((name) => this.toolDefinitions.has(name));
+    const pythonTools = createPythonAgentTools(
       this.toolDefinitions,
-      allowlist,
+      pythonAllowlist,
       this.config.python,
       () => ({
         sessionId: this.session.metadata.id,
         dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
       }),
     );
+    const nativeTools = createNativeAgentToolSet(allowlist, {
+      runtime: this.runtime,
+      projectRoot: this.config.cwd,
+      getRuntimeContext: () => ({
+        sessionId: this.session.metadata.id,
+        agentName: profile.id,
+        projectRoot: this.config.cwd,
+      }),
+    });
+    const tools = [...pythonTools];
     if (allowlist.includes("delegate_agent")) {
-      tools.push(createDelegationTool(this.config.agents, this.subagents, () => this.session.metadata.agentOverrides));
+      tools.push(createDelegationTool(
+        this.config.agents,
+        this.subagents,
+        () => this.session.metadata.agentOverrides,
+        () => this.session.metadata.id,
+      ));
     }
+    tools.push(...nativeTools.tools);
     return new Agent({
       initialState: {
         systemPrompt: composeSystemPrompt(profile),
@@ -133,10 +166,12 @@ export class ShopAgent {
     this.agent = agent;
     this.savedMessageCount = agent.state.messages.length;
     this.unsubscribeAgent = agent.subscribe(async (event) => {
-      await this.emit({ type: "agent_event", event });
+      if (!isDeveloperDiagnosticAgentEvent(event)) {
+        await this.emit({ type: "agent_event", event: sanitizeDeveloperDiagnosticAgentEvent(event) });
+      }
       if (event.type === "agent_end") {
         const unsaved = this.agent.state.messages.slice(this.savedMessageCount);
-        await this.sessions.appendMessages(this.session, unsaved);
+        await this.sessions.appendMessages(this.session, sanitizeDeveloperDiagnosticMessages(unsaved));
         this.savedMessageCount = this.agent.state.messages.length;
       }
     });
@@ -256,7 +291,7 @@ export class ShopAgent {
   }
 
   getMessages() {
-    return this.agent.state.messages;
+    return sanitizeDeveloperDiagnosticMessages(this.agent.state.messages);
   }
 }
 

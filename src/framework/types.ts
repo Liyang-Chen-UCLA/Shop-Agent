@@ -18,8 +18,17 @@ export type AgentProfile = {
   thinking?: ThinkingLevel;
   tools?: string[];
   outputSchema?: JsonSchema;
+  /** Trusted postprocessor configuration; never exposed as an LLM-visible tool. */
+  outputValidator?: OutputValidatorConfig;
   maxRetries?: number;
   timeoutMs?: number;
+};
+
+export type OutputValidatorConfig = {
+  /** Stable framework registry id for a trusted validator implementation. */
+  id: string;
+  /** Number of same-context JSON repair steers allowed after the initial output. */
+  maxOutputRepairs?: number;
 };
 
 export type PythonConfig = {
@@ -68,6 +77,12 @@ export type PythonToolDefinition = {
 export type PythonToolRuntimeContext = {
   sessionId: string;
   dataDirectory: string;
+};
+
+export type NativeToolRuntimeContext = {
+  sessionId: string;
+  agentName: string;
+  projectRoot: string;
 };
 
 export type SessionMetadata = {

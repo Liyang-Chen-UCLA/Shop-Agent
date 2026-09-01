@@ -10,6 +10,32 @@ Windows 上可直接交互的多 Agent TUI。主 Agent 负责理解和编排任�
 .\start.ps1
 ```
 
+### Python 环境
+
+Python 默认使用 PATH 中的 `python`。如需切换 Python 环境，可设置项目环境变量，或仅为本次启动传入路径。项目会优先使用配置文件中的 `python.executable`，其次使用 `SHOP_AGENT_PYTHON`，最后回退到 PATH 中的 `python`。
+
+当前已知的项目环境有以下两个，请按所在机器的实际路径二选一：
+
+- `D:\App\miniforge3\envs\shop-agent\python.exe`
+- `F:\Anaconda3\envs\shop-agent\python.exe`
+
+例如，在当前机器上使用 `F:` 盘环境：
+
+```powershell
+$env:SHOP_AGENT_PYTHON = "F:\Anaconda3\envs\shop-agent\python.exe"
+.\start.ps1
+
+# 或
+.\start.ps1 -Python "F:\Anaconda3\envs\shop-agent\python.exe"
+```
+
+安装 Python tools 依赖时，请使用同一个解释器：
+
+```powershell
+$env:SHOP_AGENT_PYTHON = "F:\Anaconda3\envs\shop-agent\python.exe"
+& $env:SHOP_AGENT_PYTHON -m pip install -r shop\requirements.txt
+```
+
 检查配置但不打开 TUI：
 
 ```powershell

@@ -8,9 +8,11 @@ import type {
   ShopAgentConfig,
   ShopAgentConfigInput,
 } from "./types.ts";
+import { listTrustedOutputValidators } from "./output-validator.ts";
 
 const FALLBACK_ORCHESTRATOR_PROMPT = "Route each request to an available focused subagent when useful, then synthesize its result.";
 const FALLBACK_DELEGATE_PROMPT = "Complete the one bounded task provided by the orchestrator and return a self-contained result.";
+const DEFAULT_PYTHON_EXECUTABLE = "python";
 
 export const DEFAULT_CONFIG: ShopAgentConfig = {
   provider: "opencode-go",
@@ -36,7 +38,7 @@ export const DEFAULT_CONFIG: ShopAgentConfig = {
   ],
   toolDirectories: ["shop/tools"],
   python: {
-    executable: "D:\\App\\miniforge3\\envs\\shop-agent\\python.exe",
+    executable: DEFAULT_PYTHON_EXECUTABLE,
     timeoutMs: 60_000,
     envAllowlist: [],
   },
@@ -57,12 +59,17 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 function mergeConfig(input: ShopAgentConfigInput): ShopAgentConfig {
+  const environmentPython = process.env.SHOP_AGENT_PYTHON?.trim();
   return {
     ...DEFAULT_CONFIG,
     ...input,
     agents: input.agents ?? DEFAULT_CONFIG.agents,
     toolDirectories: input.toolDirectories ?? DEFAULT_CONFIG.toolDirectories,
-    python: { ...DEFAULT_CONFIG.python, ...input.python },
+    python: {
+      ...DEFAULT_CONFIG.python,
+      executable: environmentPython || DEFAULT_CONFIG.python.executable,
+      ...input.python,
+    },
   };
 }
 
@@ -83,6 +90,16 @@ function validateConfig(config: ShopAgentConfig): void {
     if (!profile.id.trim()) throw new Error("Agent profile id cannot be empty.");
     if (ids.has(profile.id)) throw new Error(`Duplicate agent profile: ${profile.id}`);
     ids.add(profile.id);
+    if (profile.outputValidator) {
+      if (!listTrustedOutputValidators().includes(profile.outputValidator.id)) {
+        throw new Error(`Agent '${profile.id}' references unknown trusted output validator '${profile.outputValidator.id}'.`);
+      }
+      const repairs = profile.outputValidator.maxOutputRepairs ?? 0;
+      if (!Number.isInteger(repairs) || repairs < 0 || repairs > 3) {
+        throw new Error(`Agent '${profile.id}' output validator maxOutputRepairs must be an integer from 0 to 3.`);
+      }
+      if (!profile.outputSchema) throw new Error(`Agent '${profile.id}' configures an output validator without outputSchema.`);
+    }
   }
   const orchestrator = config.agents.find((profile) => profile.id === config.orchestrator);
   if (!orchestrator) throw new Error(`Orchestrator profile not found: ${config.orchestrator}`);

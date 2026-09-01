@@ -1,7 +1,8 @@
 param(
     [switch]$Check,
     [switch]$DebugMode,
-    [string]$Config
+    [string]$Config,
+    [string]$Python
 )
 
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
@@ -14,6 +15,8 @@ if (-not $env:OPENCODE_API_KEY) {
     Write-Error "OPENCODE_API_KEY is not visible in this terminal. Open a new terminal after creating the system environment variable."
     exit 1
 }
+
+if ($Python) { $env:SHOP_AGENT_PYTHON = $Python }
 
 $arguments = @("src/cli.ts")
 if ($Check) { $arguments += "--check" }

@@ -1,7 +1,9 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createModelRuntime } from "../model-runtime.ts";
 import { createPythonAgentTools } from "../python-tools.ts";
-import { messageText } from "../content.ts";
+import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
+import { messageText, sanitizeDeveloperDiagnosticMessages } from "../content.ts";
+import { createOutputValidationController } from "../output-validation-hook.ts";
 import { validateJsonSchema } from "../schema.ts";
 import { composeSystemPrompt } from "../system-prompt.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
@@ -24,8 +26,23 @@ async function main(): Promise<void> {
   const model = runtime.getModel(request.model);
   runtime.ensureThinking(model, request.thinking);
   const definitions = new Map(request.tools.map((tool) => [tool.name, tool]));
-  const tools = createPythonAgentTools(definitions, request.profile.tools ?? [], request.python);
-  const agent = new Agent({
+  const allowlist = request.profile.tools ?? [];
+  const pythonAllowlist = allowlist.filter((name) => definitions.has(name));
+  const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, request.python);
+  const nativeToolSet = createNativeAgentToolSet(allowlist, {
+    runtime,
+    projectRoot: request.projectRoot,
+    getRuntimeContext: () => ({ sessionId: request.sessionId, agentName: request.profile.id, projectRoot: request.projectRoot }),
+  });
+  const tools = [...pythonTools, ...nativeToolSet.tools];
+  let agent: Agent;
+  const validationController = createOutputValidationController({
+    profile: request.profile,
+    python: request.python,
+    projectRoot: request.projectRoot,
+    steer: (message) => agent.steer(message),
+  });
+  agent = new Agent({
     initialState: {
       systemPrompt: composeSystemPrompt(request.profile),
       model,
@@ -36,6 +53,7 @@ async function main(): Promise<void> {
     streamFn: runtime.models.streamSimple.bind(runtime.models),
     sessionId: request.runId,
     toolExecution: "sequential",
+    shouldStopAfterTurn: validationController.shouldStopAfterTurn,
   });
 
   agent.subscribe((event) => {
@@ -47,16 +65,45 @@ async function main(): Promise<void> {
         emit({ type: "thinking_delta", delta: event.assistantMessageEvent.delta });
       }
     } else if (event.type === "tool_execution_start") {
-      emit({ type: "tool_start", name: event.toolName, args: event.args });
+      if (event.toolName !== DEVELOPER_ISSUE_TOOL) emit({ type: "tool_start", name: event.toolName, args: event.args });
     } else if (event.type === "tool_execution_end") {
-      emit({ type: "tool_end", name: event.toolName, result: event.result, isError: event.isError });
+      if (event.toolName === DEVELOPER_ISSUE_TOOL) return;
+      const result = event.toolName === WEB_SEARCH_TOOL
+        ? (event.isError ? "web_search failed" : "web_search completed")
+        : event.result;
+      emit({ type: "tool_end", name: event.toolName, result, isError: event.isError });
     }
   });
 
   await agent.prompt(request.task);
+  if (validationController.state.terminalError) throw new Error(validationController.state.terminalError);
   const finalMessage = [...agent.state.messages].reverse().find((message) => message.role === "assistant");
   const text = finalMessage ? messageText(finalMessage) : "";
   if (!text && agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+
+  if (request.profile.id === "criteria_agent") {
+    if (!criteriaSearchSatisfied(nativeToolSet.searchStats)) {
+      throw new Error("criteria_agent could not complete its mandatory four-query web_search research.");
+    }
+    if (nativeToolSet.searchStats.failed > 0) {
+      try {
+        await writeDeveloperIssue(request.projectRoot, {
+          sessionId: request.sessionId,
+          agentName: request.profile.id,
+          projectRoot: request.projectRoot,
+        }, {
+          category: "insufficient_information",
+          summary: "部分标准研究检索失败，已要求 criteria_agent 采用保守结果",
+          context: `web_search succeeded=${nativeToolSet.searchStats.succeeded}, failed=${nativeToolSet.searchStats.failed}`,
+          affected_entities: [request.profile.id],
+          evidence: nativeToolSet.searchStats.failures,
+          action_taken: "conservative_choice",
+        });
+      } catch {
+        // Diagnostic persistence must never replace the child result/error.
+      }
+    }
+  }
 
   let value: unknown;
   if (request.profile.outputSchema) {
@@ -65,10 +112,14 @@ async function main(): Promise<void> {
     } catch {
       throw new Error(`Subagent '${request.profile.id}' must return JSON matching its output schema.`);
     }
-    const validation = validateJsonSchema(request.profile.outputSchema, value);
-    if (!validation.valid) throw new Error(`Subagent output validation failed: ${validation.error}`);
+    if (!validationController.state.validationSucceeded) {
+      const validation = validateJsonSchema(request.profile.outputSchema, value);
+      if (!validation.valid) throw new Error(`Subagent output validation failed: ${validation.error}`);
+    } else {
+      value = validationController.state.validatedValue;
+    }
   }
-  emit({ type: "result", text, value, messages: agent.state.messages });
+  emit({ type: "result", text, value, messages: sanitizeDeveloperDiagnosticMessages(agent.state.messages) });
 }
 
 main().catch((error) => {

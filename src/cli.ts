@@ -18,6 +18,7 @@ async function main(): Promise<void> {
     process.stdout.write(`Provider: opencode-go\n`);
     process.stdout.write(`Model: ${app.currentSession.model}\n`);
     process.stdout.write(`Agents: ${app.listAgents().map((agent) => agent.id).join(", ")}\n`);
+    process.stdout.write(`Python: ${app.config.python.executable}\n`);
     return;
   }
 

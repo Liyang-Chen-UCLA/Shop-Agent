@@ -3,6 +3,10 @@ import type { PythonConfig, PythonToolDefinition, ResolvedAgentProfile } from ".
 
 export type ChildRequest = {
   runId: string;
+  /** Trusted parent session identity used by developer diagnostics. */
+  sessionId: string;
+  /** Trusted project root; never supplied by the model. */
+  projectRoot: string;
   task: string;
   profile: ResolvedAgentProfile;
   model: string;

@@ -6,12 +6,18 @@ import test from "node:test";
 import { loadConfig } from "../src/framework/config.ts";
 import { createModelRuntime } from "../src/framework/model-runtime.ts";
 import { createPythonAgentTools, discoverPythonTools } from "../src/framework/python-tools.ts";
+import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, MAX_CRITERIA_SEARCH_QUERIES, SEARCH_RESULT_MAX_CHARS, SEARCH_TRUNCATION_MARKER, truncateSearchResult } from "../src/framework/native-tools.ts";
+import { validateWithTrustedValidator } from "../src/framework/output-validator.ts";
+import { createOutputValidationController } from "../src/framework/output-validation-hook.ts";
+import { isDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticMessages } from "../src/framework/content.ts";
 import { validateJsonSchema } from "../src/framework/schema.ts";
 import { SessionStore } from "../src/framework/session-store.ts";
 import { createShopAgent } from "../src/framework/shop-agent.ts";
 import { renderRunCard, renderTaskState, summarizeValue } from "../src/tui/presentation.ts";
 
 const cwd = path.resolve(import.meta.dirname, "..");
+const pythonExecutable = process.env.SHOP_AGENT_PYTHON?.trim() || "python";
+const criteriaPythonExecutable = process.env.SHOP_AGENT_PYTHON?.trim() || "F:\\Anaconda3\\envs\\shop-agent\\python.exe";
 
 test("loads project config and OpenCode Go model catalog", async () => {
   const config = await loadConfig(cwd);
@@ -21,13 +27,32 @@ test("loads project config and OpenCode Go model catalog", async () => {
     "taxonomy_search_nodes",
     "taxonomy_get_nodes",
     "taxonomy_get_children",
+    "report_developer_issue",
   ]);
+  assert.equal(config.agents.find((agent) => agent.id === "criteria_agent")?.outputValidator?.id, "criteria_v1");
   assert.match(config.agents[0].systemPrompt, /orchestrator/i);
 
   const runtime = createModelRuntime();
   const model = runtime.getModel("muse-spark-1.2-contributor");
   assert.equal(model.provider, "opencode-go");
   runtime.ensureThinking(model, "medium");
+});
+
+test("selects Python executable from the environment unless config overrides it", async () => {
+  const previous = process.env.SHOP_AGENT_PYTHON;
+  process.env.SHOP_AGENT_PYTHON = "python-from-environment";
+  try {
+    const environmentConfig = await loadConfig(cwd);
+    assert.equal(environmentConfig.python.executable, "python-from-environment");
+
+    const explicitConfig = await loadConfig(cwd, undefined, {
+      python: { executable: "python-from-config" },
+    });
+    assert.equal(explicitConfig.python.executable, "python-from-config");
+  } finally {
+    if (previous === undefined) delete process.env.SHOP_AGENT_PYTHON;
+    else process.env.SHOP_AGENT_PYTHON = previous;
+  }
 });
 
 test("validates the JSON Schema subset used by tool manifests", () => {
@@ -40,6 +65,136 @@ test("validates the JSON Schema subset used by tool manifests", () => {
   assert.deepEqual(validateJsonSchema(schema, { name: "item", count: 2 }), { valid: true });
   assert.equal(validateJsonSchema(schema, { count: 2 }).valid, false);
   assert.equal(validateJsonSchema(schema, { name: "item", extra: true }).valid, false);
+});
+
+test("truncates native search output at a safe boundary", () => {
+  const result = truncateSearchResult("a".repeat(SEARCH_RESULT_MAX_CHARS + 50));
+  assert.equal(result.length, SEARCH_RESULT_MAX_CHARS);
+  assert.ok(result.endsWith(SEARCH_TRUNCATION_MARKER));
+  assert.equal(truncateSearchResult("short"), "short");
+});
+
+test("enforces the four-base-query criteria search policy with one optional follow-up", () => {
+  assert.equal(criteriaSearchSatisfied({ attempted: 3, succeeded: 3 }), false);
+  assert.equal(criteriaSearchSatisfied({ attempted: 4, succeeded: 0 }), false);
+  assert.equal(criteriaSearchSatisfied({ attempted: 4, succeeded: 1 }), true);
+  assert.equal(criteriaSearchSatisfied({ attempted: MAX_CRITERIA_SEARCH_QUERIES, succeeded: 1 }), true);
+  assert.equal(MAX_CRITERIA_SEARCH_QUERIES, 5);
+});
+
+test("output validation controller steers one repair and never succeeds after a second invalid candidate", async () => {
+  const profile = {
+    id: "criteria_agent",
+    role: "subagent",
+    description: "",
+    systemPrompt: "",
+    outputSchema: {
+      type: "object",
+      properties: { ok: { type: "boolean" } },
+      required: ["ok"],
+      additionalProperties: false,
+    },
+    outputValidator: { id: "fake", maxOutputRepairs: 1 },
+  } as never;
+  const turn = (text: string) => ({ message: { role: "assistant", content: [{ type: "text", text }] } } as never);
+  const steers: unknown[] = [];
+  const controller = createOutputValidationController({
+    profile,
+    python: { executable: pythonExecutable, timeoutMs: 10_000, envAllowlist: [] },
+    projectRoot: cwd,
+    steer: (message) => steers.push(message),
+    validateTrusted: async (_validator, value) => value && (value as { ok?: unknown }).ok === true
+      ? { valid: true, value }
+      : { valid: false, error: "trusted rejection" },
+  });
+  assert.equal(await controller.shouldStopAfterTurn(turn('{"ok":"bad"}')), false);
+  assert.equal(steers.length, 1);
+  assert.equal(controller.state.repairCount, 1);
+  assert.equal(await controller.shouldStopAfterTurn(turn('{"ok":true}')), true);
+  assert.equal(controller.state.validationSucceeded, true);
+  assert.deepEqual(controller.state.validatedValue, { ok: true });
+
+  const failedSteers: unknown[] = [];
+  const failed = createOutputValidationController({
+    profile,
+    python: { executable: pythonExecutable, timeoutMs: 10_000, envAllowlist: [] },
+    projectRoot: cwd,
+    steer: (message) => failedSteers.push(message),
+    validateTrusted: async () => ({ valid: false, error: "still invalid" }),
+  });
+  assert.equal(await failed.shouldStopAfterTurn(turn('{"ok":false}')), false);
+  assert.equal(await failed.shouldStopAfterTurn(turn('{"ok":false}')), true);
+  assert.equal(failedSteers.length, 1);
+  assert.equal(failed.state.validationSucceeded, false);
+  assert.match(failed.state.terminalError ?? "", /validation failed/);
+});
+
+test("diagnostic events and persisted messages are redacted without breaking tool pairing", () => {
+  const assistant = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "diag-call", name: "report_developer_issue", arguments: { evidence: "secret" } }],
+  } as never;
+  const result = {
+    role: "toolResult",
+    toolCallId: "diag-call",
+    toolName: "report_developer_issue",
+    content: [{ type: "text", text: "developer issue recorded" }],
+    details: { evidence: "secret" },
+    isError: false,
+    timestamp: Date.now(),
+  } as never;
+  const sanitized = sanitizeDeveloperDiagnosticMessages([assistant, result]);
+  assert.equal((sanitized[0] as any).content[0].id, "diag-call");
+  assert.equal((sanitized[0] as any).content[0].arguments.redacted, "[DEVELOPER_DIAGNOSTIC_REDACTED]");
+  assert.equal((sanitized[1] as any).details, "[DEVELOPER_DIAGNOSTIC_REDACTED]");
+  assert.doesNotMatch(JSON.stringify(sanitized), /secret/);
+  assert.equal(isDeveloperDiagnosticAgentEvent({ type: "tool_execution_start", toolName: "report_developer_issue" }), true);
+  assert.equal(isDeveloperDiagnosticAgentEvent({ type: "tool_execution_end", toolName: "web_search" }), false);
+  const ended = sanitizeDeveloperDiagnosticAgentEvent({ type: "agent_end", messages: [assistant, result] }) as any;
+  assert.doesNotMatch(JSON.stringify(ended), /secret/);
+});
+
+test("native developer diagnostics use trusted context and bounded JSONL", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-feedback-test-"));
+  try {
+    const set = createNativeAgentToolSet([DEVELOPER_ISSUE_TOOL], {
+      runtime: {} as never,
+      projectRoot: directory,
+      getRuntimeContext: () => ({ sessionId: "trusted-session", agentName: "route_agent", projectRoot: directory }),
+    });
+    await set.tools[0].execute("feedback-call", {
+      category: "other",
+      summary: "s".repeat(2_000),
+      context: "context",
+      affected_entities: ["node"],
+      evidence: ["evidence"],
+      action_taken: "omitted",
+    });
+    const { readFile } = await import("node:fs/promises");
+    const line = (await readFile(path.join(directory, ".shop-agent", "developer-feedback", "issues.jsonl"), "utf8")).trim();
+    const record = JSON.parse(line) as { session_id: string; agent: string; summary: string; projectRoot?: string };
+    assert.equal(record.session_id, "trusted-session");
+    assert.equal(record.agent, "route_agent");
+    assert.equal(record.summary.length, 500);
+    assert.equal(record.projectRoot, undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("trusted criteria validator accepts a minimal document and rejects semantic errors", async () => {
+  const valid = await validateWithTrustedValidator({ id: "criteria_v1" }, {
+    node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
+    criteria: [],
+    attributes: [],
+  }, { executable: criteriaPythonExecutable, timeoutMs: 10_000, envAllowlist: [] }, cwd);
+  assert.equal(valid.valid, true);
+  const invalid = await validateWithTrustedValidator({ id: "criteria_v1" }, {
+    node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
+    criteria: [{ id: "battery_life", name: "续航", description: "d", aliases: [], type: "numeric", units: [], direction: { type: "target_range", unit: "小时" } }],
+    attributes: [],
+  }, { executable: criteriaPythonExecutable, timeoutMs: 10_000, envAllowlist: [] }, cwd);
+  assert.equal(invalid.valid, false);
 });
 
 test("formats safe TUI summaries, run cards, and task state", () => {
@@ -86,7 +241,7 @@ test("formats safe TUI summaries, run cards, and task state", () => {
 test("runs a manifest-based Python tool without leaking OPENCODE_API_KEY", async () => {
   const definitions = await discoverPythonTools(cwd, ["tests/fixtures"]);
   const tools = createPythonAgentTools(definitions, ["echo_python"], {
-    executable: "D:\\App\\miniforge3\\envs\\shop-agent\\python.exe",
+    executable: pythonExecutable,
     timeoutMs: 10_000,
     envAllowlist: [],
   });
@@ -127,7 +282,7 @@ test("queries canonical taxonomy nodes and direct children in batches", async ()
     definitions,
     ["taxonomy_search_nodes", "taxonomy_get_nodes", "taxonomy_get_children"],
     {
-      executable: "D:\\App\\miniforge3\\envs\\shop-agent\\python.exe",
+      executable: pythonExecutable,
       timeoutMs: 10_000,
       envAllowlist: [],
     },
@@ -160,7 +315,7 @@ test("persists minimal task state per trusted session with LangGraph SQLite", as
   try {
     const definitions = await discoverPythonTools(cwd, ["shop/tools"]);
     const config = {
-      executable: "D:\\App\\miniforge3\\envs\\shop-agent\\python.exe",
+      executable: pythonExecutable,
       timeoutMs: 30_000,
       envAllowlist: [],
     };
@@ -239,10 +394,11 @@ test("creates an interactive orchestrator with state tools and focused subagents
       "task_state_set_active",
       "task_state_delete",
       "delegate_agent",
+      "report_developer_issue",
     ]);
     const result = await app.agent.state.tools[4].execute("list-call", { action: "list" });
     const agents = JSON.parse((result.content[0] as { text: string }).text) as { id: string }[];
-    assert.deepEqual(agents.map((agent) => agent.id), ["route_agent", "product_analyst", "delegate"]);
+    assert.deepEqual(agents.map((agent) => agent.id), ["route_agent", "criteria_agent", "delegate"]);
 
     const state = await app.getTaskState();
     assert.deepEqual(state.tasks, []);

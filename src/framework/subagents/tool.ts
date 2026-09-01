@@ -9,6 +9,7 @@ export function createDelegationTool(
   profiles: ResolvedAgentProfile[],
   manager: SubagentManager,
   getOverrides: () => Overrides,
+  getSessionId: () => string = () => "unknown-session",
 ): AgentTool<any> {
   const subagents = profiles.filter((profile) => profile.role === "subagent");
   return {
@@ -40,6 +41,7 @@ export function createDelegationTool(
         signal,
         onUpdate,
         override: getOverrides()[profile.id],
+        sessionId: getSessionId(),
       });
       return {
         content: [{ type: "text", text: result.value === undefined ? result.text : JSON.stringify(result.value) }],

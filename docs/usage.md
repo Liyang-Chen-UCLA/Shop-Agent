@@ -28,10 +28,13 @@ Show full error stacks in the TUI and write diagnostics to `.shop-agent/logs/sho
 
 No npm command, package publication, link, or compilation step is part of this workflow.
 
-The Python business tools require the packages pinned in `shop/requirements.txt`, installed into `D:\App\miniforge3\envs\shop-agent`.
+The Python business tools require the packages pinned in `shop/requirements.txt`, installed into the Python environment selected for the project.
+
+The interpreter is configurable. Set `SHOP_AGENT_PYTHON` to a Python command or executable path; otherwise the runtime uses `python` from `PATH`. The `-Python` parameter on `start.ps1` applies the setting for one launch.
 
 ```powershell
-& 'D:\App\miniforge3\envs\shop-agent\python.exe' -m pip install -r shop\requirements.txt
+$env:SHOP_AGENT_PYTHON = "D:\venvs\shop-agent\Scripts\python.exe"
+& $env:SHOP_AGENT_PYTHON -m pip install -r shop\requirements.txt
 ```
 
 ## Commands
@@ -70,4 +73,4 @@ Foreground subagent work appears inline as a persistent execution card. The card
 - `.shop-agent/checkpoints/task-state.sqlite3` stores session-isolated product-analysis state.
 - `docs/backlog/` records intentionally deferred framework capabilities.
 
-The orchestrator has narrow task-state tools plus `delegate_agent`. The `route_agent` can access only taxonomy tools, the `product_analyst` is tool-free, and the general `delegate` remains tool-free. Add future Python tool names to a profile's explicit `tools` allowlist in `shop/agents.ts`.
+The orchestrator has narrow task-state tools plus `delegate_agent` and an explicit developer-diagnostic tool. The `route_agent` can access taxonomy tools plus that diagnostic tool. `criteria_agent` receives only confirmed route facts, must use its isolated `web_search` tool before producing transient criteria and distinguishing attributes, and is validated by the trusted Pydantic contract. The general `delegate` remains tool-free. Add future tool names to a profile's explicit `tools` allowlist in `shop/agents.ts`.

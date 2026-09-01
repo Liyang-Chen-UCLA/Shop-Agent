@@ -3,8 +3,8 @@
 - This project runs on Windows with Node.js 22.19 or newer.
 - Run the interactive application directly with `node src/cli.ts`.
 - Do not add npm publishing, package binaries, npm scripts, or a TypeScript build step unless the user explicitly asks for them.
-- The only Python environment available to this project is `D:\App\miniforge3\envs\shop-agent`.
-- Use `D:\App\miniforge3\envs\shop-agent\python.exe` for every Python tool. Do not use the system Python or create another environment.
+- The project Python environment is available at either `D:\App\miniforge3\envs\shop-agent` or `F:\Anaconda3\envs\shop-agent`, depending on the machine. Use the path that exists locally.
+- Use the selected environment's `python.exe` for every Python tool. Do not use the system Python or create another environment.
 - Model credentials come from the system environment. Never write `OPENCODE_API_KEY` or other secrets into repository files or logs.
 - Runtime sessions, subagent runs, and logs belong under `.shop-agent/` and must not be committed.
 - LLM-visible tools are allowlisted per agent profile. Do not add filesystem, shell, or generic HTTP tools to the orchestrator.
@@ -20,3 +20,11 @@
 - Route refinement from a parent node to a direct child keeps the same task ID and updates both the product name and route. Let the user stop at a non-leaf node; do not guess a deeper category without evidence.
 - Persist canonical task state with a Python LangGraph SQLite checkpointer keyed by the trusted session ID. Full transcript recovery handles conversational confirmations in the current design.
 - Keep taxonomy lookup and task-state business logic in Python. TypeScript should only provide the minimal runtime bridge required by the existing Node.js CLI and agent framework.
+
+<!-- codex-execution-mode:start -->
+## Active Codex Execution Mode: Sol -> Luna -> Sol
+
+For this project, GPT-5.6 Sol owns architecture, the concise plan, acceptance criteria, and final review. Small work may remain in Sol. For substantial implementation, Sol must delegate bulk implementation and routine validation to exactly one built-in `worker` explicitly configured with `model = "gpt-5.6-luna"`, `model_reasoning_effort = "max"`, `fork_turns = "none"`, and task label `luna_executor`; then Sol must inspect the diff and results and return narrowly scoped corrections to that same worker when needed. Do not use an unconfigured worker, a full-history fork, a custom-agent file, or overlapping write-heavy agents. A later explicit user instruction overrides this mode.
+
+Before claiming this mode is active, establish that the primary session is GPT-5.6 Sol from exposed runtime metadata, an exact applicable Codex model configuration with no known conflicting override, or an explicit launcher or user statement. Report the evidence used and note that a hidden UI or CLI override can supersede static configuration. If evidence conflicts or remains insufficient, stop and ask the user to switch to GPT-5.6 Sol.
+<!-- codex-execution-mode:end -->
