@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/framework/config.ts";
-import { createModelRuntime } from "../src/framework/model-runtime.ts";
+import { createModelRuntime, resolveThinking } from "../src/framework/model-runtime.ts";
 import { createPythonAgentTools, discoverPythonTools } from "../src/framework/python-tools.ts";
 import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, MAX_CRITERIA_SEARCH_QUERIES, SEARCH_RESULT_MAX_CHARS, SEARCH_TRUNCATION_MARKER, truncateSearchResult } from "../src/framework/native-tools.ts";
 import { validateWithTrustedValidator } from "../src/framework/output-validator.ts";
@@ -34,6 +34,44 @@ test("loads project config and OpenCode Go model catalog", async () => {
   const model = runtime.getModel("muse-spark-1.2-contributor");
   assert.equal(model.provider, "opencode-go");
   runtime.ensureThinking(model, "medium");
+});
+
+test("resolves thinking for a target model without lowering while a higher level is available", () => {
+  const model = {
+    id: "test-model",
+    reasoning: true,
+    thinkingLevelMap: {
+      off: "off",
+      minimal: "minimal",
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: null,
+    },
+  } as never;
+
+  assert.equal(resolveThinking(model, "low"), "low");
+  assert.equal(resolveThinking(model, "medium"), "high");
+  assert.equal(resolveThinking(model, "xhigh"), "high");
+});
+
+test("resolves to the highest supported thinking level when no higher level exists", () => {
+  const model = {
+    id: "test-model",
+    reasoning: true,
+    thinkingLevelMap: {
+      off: "off",
+      minimal: null,
+      low: null,
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: null,
+    },
+  } as never;
+
+  assert.equal(resolveThinking(model, "minimal"), "high");
 });
 
 test("uses uv for the project Python environment", async () => {

@@ -266,14 +266,17 @@ export class ShopAgent {
     const currentThinking = agentId === this.config.orchestrator
       ? this.session.metadata.thinking
       : this.session.metadata.agentOverrides[agentId]?.thinking ?? target.thinking ?? this.config.defaultThinking;
-    this.runtime.ensureThinking(model, currentThinking);
+    const thinking = this.runtime.resolveThinking(model, currentThinking);
     if (agentId === this.config.orchestrator) {
       this.session.metadata.model = modelId;
+      this.session.metadata.thinking = thinking;
       this.agent.state.model = model;
+      this.agent.state.thinkingLevel = thinking;
     } else {
       this.session.metadata.agentOverrides[agentId] = {
         ...this.session.metadata.agentOverrides[agentId],
         model: modelId,
+        thinking,
       };
     }
     await this.sessions.saveMetadata(this.session.metadata);
