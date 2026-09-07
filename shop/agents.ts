@@ -203,8 +203,6 @@ export const agents: AgentProfile[] = [
     role: "subagent",
     description: "Maps normalized product names to canonical taxonomy nodes and discloses direct child categories.",
     systemPrompt: { file: "./shop/prompts/route-agent.md" },
-    model: { provider: "opencode-go", id: "gpt-5.6-luna" },
-    thinking: "low",
     tools: ["taxonomy_search_nodes", "taxonomy_get_nodes", "taxonomy_get_children", "report_developer_issue"],
     outputSchema: {
       type: "object",
@@ -247,8 +245,6 @@ export const agents: AgentProfile[] = [
     description: "Aligns the trusted base contract with selected Taobao OCR contexts and extracts every final criterion and attribute.",
     systemPrompt: { file: "./shop/prompts/market-agent.md" },
     skill: { file: "./shop/skills/market-alignment/SKILL.md" },
-    model: { provider: "opencode-go", id: "gpt-5.6-luna" },
-    thinking: "medium",
     tools: ["load_base", "shopping_env", "web_search", "report_developer_issue"],
     webSearchPolicy: "market",
     outputSchema: marketOutputSchema,

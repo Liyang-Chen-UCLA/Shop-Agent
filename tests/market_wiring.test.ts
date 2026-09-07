@@ -22,8 +22,8 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(criteria?.systemPrompt ?? "", /"type":"partial_order","better_than"/);
   assert.match(criteria?.systemPrompt ?? "", /attributes use the same common\/type-specific fields but must omit `direction` entirely/i);
   const routeAgent = config.agents.find((agent) => agent.id === "route_agent");
-  assert.deepEqual(routeAgent?.model, { provider: "opencode-go", id: "gpt-5.6-luna" });
-  assert.equal(routeAgent?.thinking, "low");
+  assert.equal(routeAgent?.model, undefined);
+  assert.equal(routeAgent?.thinking, undefined);
   assert.match(routeAgent?.systemPrompt ?? "", /Return exactly this JSON wrapper/);
   assert.match(routeAgent?.systemPrompt ?? "", /"results": \[\s+\{\s+"product": "\.\.\."/);
   assert.match(routeAgent?.systemPrompt ?? "", /even when there is only one product/i);
@@ -35,8 +35,8 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(orchestrator?.systemPrompt ?? "", /exactly one criteria-agent delegation in that user turn/);
   assert.match(orchestrator?.systemPrompt ?? "", /do not manually call `delegate_agent` for `criteria_agent` again in the same turn/);
   assert.equal(market?.webSearchPolicy, "market");
-  assert.deepEqual(market?.model, { provider: "opencode-go", id: "gpt-5.6-luna" });
-  assert.equal(market?.thinking, "medium");
+  assert.equal(market?.model, undefined);
+  assert.equal(market?.thinking, undefined);
   assert.equal(market?.outputValidator?.maxOutputRepairs, 2);
   assert.deepEqual(market?.tools, ["load_base", "shopping_env", "web_search", "report_developer_issue"]);
   assert.match(market?.systemPrompt ?? "", /exactly these seven top-level keys/);
