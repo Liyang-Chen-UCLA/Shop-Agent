@@ -7,20 +7,23 @@ import { createOutputValidationController } from "../output-validation-hook.ts";
 import { validateJsonSchema } from "../schema.ts";
 import { composeSystemPrompt } from "../system-prompt.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
+import { createInterface } from "node:readline";
+import { ChildPythonProxy } from "./python-proxy.ts";
 
 function emit(event: ChildEvent): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
-async function readRequest(): Promise<ChildRequest> {
-  process.stdin.setEncoding("utf8");
-  let input = "";
-  for await (const chunk of process.stdin) input += chunk;
-  return JSON.parse(input) as ChildRequest;
+async function readRequest(): Promise<{ request: ChildRequest; lines: ReturnType<typeof createInterface> }> {
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const line = await new Promise<string>((resolve) => lines.once("line", resolve));
+  return { request: JSON.parse(line) as ChildRequest, lines };
 }
 
 async function main(): Promise<void> {
-  const request = await readRequest();
+  const { request, lines } = await readRequest();
+  const python = new ChildPythonProxy(lines, emit);
+  try {
   emit({ type: "status", state: "starting", message: `Starting ${request.profile.id}` });
   const runtime = createModelRuntime();
   const model = runtime.getModel(request.model);
@@ -36,7 +39,7 @@ async function main(): Promise<void> {
     maxDistinctProducts: request.maxDistinctProducts,
     agentName: request.profile.id,
   });
-  const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, request.python, runtimeContext);
+  const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, python, runtimeContext);
   const nativeToolSet = createNativeAgentToolSet(allowlist, {
     runtime,
     projectRoot: request.projectRoot,
@@ -47,8 +50,7 @@ async function main(): Promise<void> {
   let agent: Agent;
   const validationController = createOutputValidationController({
     profile: request.profile,
-    python: request.python,
-    projectRoot: request.projectRoot,
+    python,
     runtimeContext: () => ({
       ...runtimeContext(),
       operation: request.profile.id === "market_agent" ? "publish_market" : undefined,
@@ -134,6 +136,11 @@ async function main(): Promise<void> {
     }
   }
   emit({ type: "result", text, value, messages: sanitizeDeveloperDiagnosticMessages(agent.state.messages) });
+  } finally {
+    await python.close();
+    lines.close();
+    process.stdin.pause();
+  }
 }
 
 main().catch((error) => {

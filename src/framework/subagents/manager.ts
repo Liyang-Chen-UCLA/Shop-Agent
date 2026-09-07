@@ -13,6 +13,7 @@ import type {
   RunSummary,
   SubagentUpdateDetails,
 } from "../types.ts";
+import type { PythonExecutor } from "../python-executor.ts";
 import { DEVELOPER_ISSUE_TOOL, isNativeToolName, WEB_SEARCH_TOOL } from "../native-tools.ts";
 import { sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { validateWithTrustedValidator } from "../output-validator.ts";
@@ -35,15 +36,19 @@ const CHILD_RUNNER = fileURLToPath(new URL("./child-runner.ts", import.meta.url)
 
 export class SubagentManager {
   private readonly runs = new Map<string, RunDetail>();
+  private readonly children = new Set<ChildProcessWithoutNullStreams>();
   private readonly config: ResolvedConfig;
   private readonly toolDefinitions: Map<string, PythonToolDefinition>;
+  private readonly python?: PythonExecutor;
 
   constructor(
     config: ResolvedConfig,
     toolDefinitions: Map<string, PythonToolDefinition>,
+    python?: PythonExecutor,
   ) {
     this.config = config;
     this.toolDefinitions = toolDefinitions;
+    this.python = python;
   }
 
   listRuns(): RunSummary[] {
@@ -102,7 +107,6 @@ export class SubagentManager {
       profile: options.profile,
       model: detail.model,
       thinking: detail.thinking,
-      python: this.config.python,
       tools,
     };
 
@@ -200,8 +204,7 @@ export class SubagentManager {
     const validation = await validateWithTrustedValidator(
       { id: "market_v1" },
       result.value,
-      this.config.python,
-      this.config.cwd,
+      this.requirePython(),
       undefined,
       {
         operation: "persist_base",
@@ -252,7 +255,8 @@ export class SubagentManager {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    child.stdin.end(JSON.stringify(request));
+    this.children.add(child);
+    child.stdin.write(`${JSON.stringify(request)}\n`);
     let buffer = "";
     let stderr = "";
     let finalResult: Extract<ChildEvent, { type: "result" }> | undefined;
@@ -260,6 +264,7 @@ export class SubagentManager {
     let timedOut = false;
     let reportedReasoning = false;
     let reportedWriting = false;
+    const pythonRequests = new Map<string, AbortController>();
 
     const abort = () => this.terminate(child);
     const timeout = setTimeout(() => {
@@ -309,6 +314,19 @@ export class SubagentManager {
               timestamp: new Date().toISOString(), attempt, type: "tool_end", state: "running", tool: event.name,
               result, isError: event.isError,
             }, onUpdate);
+          } else if (event.type === "python_request") {
+            const controller = new AbortController();
+            pythonRequests.set(event.id, controller);
+            void this.handlePythonRequest(request, event, controller.signal).then(
+              (result) => {
+                if (child.stdin.writable) child.stdin.write(`${JSON.stringify({ type: "python_response", id: event.id, ok: true, result })}\n`);
+              },
+              (error) => {
+                if (child.stdin.writable) child.stdin.write(`${JSON.stringify({ type: "python_response", id: event.id, ok: false, error: error instanceof Error ? error.message : String(error) })}\n`);
+              },
+            ).finally(() => pythonRequests.delete(event.id));
+          } else if (event.type === "python_cancel") {
+            pythonRequests.get(event.id)?.abort();
           } else if (event.type === "result") {
             finalResult = event;
           } else if (event.type === "error") {
@@ -327,6 +345,9 @@ export class SubagentManager {
       child.once("error", reject);
       child.once("close", resolve);
     }).finally(() => {
+      this.children.delete(child);
+      for (const controller of pythonRequests.values()) controller.abort();
+      pythonRequests.clear();
       clearTimeout(timeout);
       signal?.removeEventListener("abort", abort);
     });
@@ -353,6 +374,38 @@ export class SubagentManager {
     }, onUpdate);
     await this.saveSummary(runDirectory, detail);
     return { text: finalResult.text, value: finalResult.value, runId: request.runId };
+  }
+
+  private requirePython(): PythonExecutor {
+    if (!this.python) throw new Error("SubagentManager requires a shared PythonExecutor for Python operations.");
+    return this.python;
+  }
+
+  private async handlePythonRequest(request: ChildRequest, event: Extract<ChildEvent, { type: "python_request" }>, signal?: AbortSignal): Promise<unknown> {
+    const python = this.requirePython();
+    if (event.operation === "tool") {
+      const allowed = request.tools.find((definition) => definition.name === event.tool);
+      if (!allowed || !(request.profile.tools ?? []).includes(event.tool)) {
+        throw new Error(`Subagent '${request.profile.id}' is not allowed to call Python tool '${event.tool}'.`);
+      }
+      return python.executeTool(allowed, event.callId, event.arguments, event.context, signal);
+    }
+    if (request.profile.outputValidator?.id !== event.validator) {
+      throw new Error(`Subagent '${request.profile.id}' is not allowed to call trusted validator '${event.validator}'.`);
+    }
+    const result = await python.validate({ id: event.validator }, event.value, event.context, signal);
+    if (!result.valid) throw new Error(result.error);
+    return result.value;
+  }
+
+  async close(): Promise<void> {
+    const children = [...this.children];
+    this.children.clear();
+    const closed = children.map((child) => child.exitCode !== null
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => child.once("close", () => resolve())));
+    for (const child of children) this.terminate(child);
+    await Promise.all(closed);
   }
 
   private recordEvent(

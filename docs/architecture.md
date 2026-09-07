@@ -46,7 +46,7 @@ PowerShell start.ps1
 
 The orchestrator sees only the `delegate_agent` framework tool by default. It can list profiles, inspect one profile, or run one foreground subagent.
 
-Each run starts `src/framework/subagents/child-runner.ts` in an independent Node process. The child receives a fresh task rather than the parent transcript, loads only its profile allowlist, streams JSON Lines events to the parent, and stores its full transcript under `.shop-agent/runs/`. Subagents cannot delegate again in the current design.
+Each run starts `src/framework/subagents/child-runner.ts` in an independent Node process. The child receives a fresh task rather than the parent transcript, loads only its profile allowlist, streams JSON Lines events to the parent, and stores its full transcript under `.shop-agent/runs/`. Subagents cannot delegate again and never start Python. Python requests travel to `SubagentManager`, which rechecks the child profile permission before forwarding them to the shared worker.
 
 Native tools are resolved through the same explicit profile allowlists as Python
 tools. `web_search` is available to `criteria_agent` and `market_agent`; it
@@ -63,7 +63,9 @@ records with framework-injected session/agent metadata to
 
 Python tools are discovered from `shop/tools/**/tool.json`, but discovery does not expose them automatically. A profile in `shop/agents.ts` must explicitly include the tool name.
 
-Every call starts `uv run python` in UTF-8 mode, sends one JSON request over stdin, and validates the JSON response against the manifest output schema. The project environment is declared in `pyproject.toml` and locked in `uv.lock`; Python receives only the Windows runtime variables and explicitly allowlisted business variables, so it does not inherit `OPENCODE_API_KEY` by default.
+`uv` is setup-only. At application creation the framework resolves the repo-local `.venv` interpreter and starts one long-running `src/framework/python/worker.py`. The worker uses JSONL RPC for tools, trusted validators, health checks, and shutdown. Calls execute strictly serially; timeouts begin only after dequeue. A queued abort removes only that request, while a running abort, timeout, or crash fails the active and queued requests, kills the worker, and performs one automatic restart without replaying business work.
+
+The worker starts with a minimal system environment. For each call the parent sends only values admitted by `python.envAllowlist` and the tool manifest's `env` list; values are injected for the duration of `handle` and then restored. `OPENCODE_API_KEY` is absent by default. Python `print` output is redirected to stderr so stdout remains RPC-only. Business requests select registry-bound tool names or trusted validator IDs and cannot supply code paths.
 
 For tools used by the main orchestrator, the framework injects a trusted runtime context containing the current session ID and data-directory path. These values are outside the model-authored arguments. LangGraph state tools use that session ID as the SQLite checkpoint thread key, preventing a model from choosing another session's state.
 
@@ -113,4 +115,4 @@ The canonical taxonomy is `shop/data/google_product_taxonomy_zh-CN.jsonl`. Tools
   `market.json` is the last-published validated market index. Existing market
   artifacts are reused, and a base-only directory skips the criteria stage.
 
-Deferred concurrency, background runs, FleetView, and a persistent Python worker are documented in [`backlog/`](./backlog/).
+Deferred concurrency, background runs, and FleetView are documented in [`backlog/`](./backlog/). The persistent worker entry records the completed migration.

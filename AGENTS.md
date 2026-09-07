@@ -4,7 +4,7 @@
 - Run the interactive application directly with `node src/cli.ts`.
 - Do not add npm publishing, package binaries, npm scripts, or a TypeScript build step unless the user explicitly asks for them.
 - The project Python environment is managed by uv from the root `pyproject.toml` and `uv.lock`; run `uv sync --locked` to provision it.
-- Invoke every Python tool through `uv run python` from the project environment. Do not select an interpreter path or create another environment.
+- Use `uv sync --locked` only to provision the repo-local `.venv`. Runtime Python tools and validators must use the shared persistent worker; never fall back to uv, system Python, or another environment.
 - Model credentials come from the system environment. Never write `OPENCODE_API_KEY` or other secrets into repository files or logs.
 - Runtime sessions, subagent runs, and logs belong under `.shop-agent/` and must not be committed.
 - LLM-visible tools are allowlisted per agent profile. Do not add filesystem, shell, or generic HTTP tools to the orchestrator.

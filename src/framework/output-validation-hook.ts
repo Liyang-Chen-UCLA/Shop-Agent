@@ -2,7 +2,8 @@ import type { AgentMessage, ShouldStopAfterTurnContext } from "@earendil-works/p
 import { messageText } from "./content.ts";
 import { validateJsonSchema } from "./schema.ts";
 import { validateWithTrustedValidator, type TrustedValidationResult } from "./output-validator.ts";
-import type { PythonConfig, ResolvedAgentProfile } from "./types.ts";
+import type { PythonExecutor } from "./python-executor.ts";
+import type { ResolvedAgentProfile } from "./types.ts";
 
 export type TrustedRuntimeContext = Record<string, unknown> | (() => Record<string, unknown>);
 
@@ -15,16 +16,14 @@ export type OutputValidationControllerState = {
 
 export type OutputValidationControllerOptions = {
   profile: ResolvedAgentProfile;
-  python: PythonConfig;
-  projectRoot: string;
+  python: PythonExecutor;
   steer: (message: AgentMessage) => void;
   /** Trusted context for validators; never sourced from model output. */
   runtimeContext?: TrustedRuntimeContext;
   validateTrusted?: (
     validator: NonNullable<ResolvedAgentProfile["outputValidator"]>,
     value: unknown,
-    python: PythonConfig,
-    projectRoot: string,
+    python: PythonExecutor,
     runtimeContext?: Record<string, unknown>,
   ) => Promise<TrustedValidationResult>;
 };
@@ -52,8 +51,8 @@ export function createOutputRepairMessage(error: string): AgentMessage {
 
 export function createOutputValidationController(options: OutputValidationControllerOptions): OutputValidationController {
   const state: OutputValidationControllerState = { repairCount: 0, validationSucceeded: false };
-  const validator = options.validateTrusted ?? ((config, value, python, projectRoot, runtimeContext) => (
-    validateWithTrustedValidator(config, value, python, projectRoot, undefined, runtimeContext)
+  const validator = options.validateTrusted ?? ((config, value, python, runtimeContext) => (
+    validateWithTrustedValidator(config, value, python, undefined, runtimeContext)
   ));
   const maxRepairs = Math.max(0, Math.min(3, options.profile.outputValidator?.maxOutputRepairs ?? 0));
 
@@ -92,7 +91,7 @@ export function createOutputValidationController(options: OutputValidationContro
         const context = typeof options.runtimeContext === "function"
           ? options.runtimeContext()
           : options.runtimeContext;
-        const trusted = await validator(options.profile.outputValidator, candidate, options.python, options.projectRoot, context);
+        const trusted = await validator(options.profile.outputValidator, candidate, options.python, context);
         if (!trusted.valid) return fail(trusted.error);
         state.validatedValue = trusted.value ?? candidate;
       } else {

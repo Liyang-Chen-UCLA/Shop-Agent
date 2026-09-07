@@ -18,7 +18,7 @@ Windows 上可直接交互的多 Agent TUI。主 Agent 负责理解和编排任�
 uv sync --locked
 ```
 
-运行时由框架统一调用 `uv run python`，不需要配置 Python 可执行文件或激活虚拟环境。检查配置、uv 环境和 Python 依赖但不打开 TUI：
+运行时只使用 repo-local `.venv` 中的持久 Python Worker；`uv` 仅负责 setup 和依赖管理。检查配置、`.venv` 和 Python 依赖但不打开 TUI：
 
 ```powershell
 .\start.ps1 -Check

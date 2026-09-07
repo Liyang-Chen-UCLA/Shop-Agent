@@ -1,0 +1,8 @@
+{
+  "name": "worker_test",
+  "description": "Exercise persistent worker behavior.",
+  "entry": "main.py",
+  "inputSchema": { "type": "object", "additionalProperties": true },
+  "outputSchema": { "type": "object", "additionalProperties": true },
+  "env": ["WORKER_ALLOWED_TEST"]
+}

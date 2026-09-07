@@ -38,7 +38,7 @@ Example manifest:
 }
 ```
 
-The runner starts `uv run python` from the project environment, sends one JSON object to stdin, and expects exactly one JSON object on stdout. Write logs to stderr.
+The application imports each registered `handle(arguments, context)` into its one persistent `.venv` worker. Worker stdout is reserved for JSONL RPC; ordinary tool output is redirected to stderr. The `run_tool(handle)` block remains available only as a direct CLI debugging entry point.
 
 Input (the runtime injects `context`; it is not supplied by the model):
 

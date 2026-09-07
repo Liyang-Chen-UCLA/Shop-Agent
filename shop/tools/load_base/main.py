@@ -40,4 +40,5 @@ def handle(_arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any
     return value
 
 
-run_tool(handle)
+if __name__ == "__main__":
+    run_tool(handle)

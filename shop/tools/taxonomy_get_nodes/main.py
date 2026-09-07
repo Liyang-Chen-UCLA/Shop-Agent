@@ -19,4 +19,5 @@ def handle(arguments: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any
     return {"nodes": nodes, "missing_node_ids": missing}
 
 
-run_tool(handle)
+if __name__ == "__main__":
+    run_tool(handle)

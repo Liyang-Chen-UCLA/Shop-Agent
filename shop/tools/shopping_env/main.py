@@ -14,4 +14,5 @@ def handle(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]
     return shopping_env(arguments, context)
 
 
-run_tool(handle)
+if __name__ == "__main__":
+    run_tool(handle)

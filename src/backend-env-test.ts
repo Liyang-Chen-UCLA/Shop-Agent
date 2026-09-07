@@ -7,6 +7,8 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { discoverPythonTools, createPythonAgentTools } from "./framework/python-tools.ts";
 import { messageText } from "./framework/content.ts";
 import type { PythonToolRuntimeContext, ResolvedConfig, TaskState } from "./framework/types.ts";
+import type { PythonExecutor } from "./framework/python-executor.ts";
+import { PythonWorker } from "./framework/python-worker.ts";
 
 export type BackendEnvRoute = {
   node_id: string;
@@ -89,6 +91,7 @@ export type BackendEnvTestConfig = Pick<
 /** Narrow app surface required by this runner; a fake can implement it offline. */
 export type BackendEnvTestApp = {
   config: BackendEnvTestConfig;
+  python?: PythonExecutor;
   prompt(text: string): Promise<void>;
   getMessages(): readonly AgentMessage[];
   getTaskState(): Promise<TaskState>;
@@ -123,6 +126,7 @@ export type BackendEnvTestResult = {
 export type BackendEnvProbe = (
   scenario: BackendEnvScenario,
   config: BackendEnvTestConfig,
+  python?: PythonExecutor,
 ) => Promise<readonly BackendEnvSampleSummary[]>;
 
 export type RunBackendEnvTestOptions = {
@@ -238,8 +242,10 @@ function taskForScenario(state: TaskState, scenario: BackendEnvScenario): TaskSt
 export async function probeBackendEnv(
   scenario: BackendEnvScenario,
   config: BackendEnvTestConfig,
+  sharedPython?: PythonExecutor,
 ): Promise<readonly BackendEnvSampleSummary[]> {
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-backend-env-"));
+  let ownedPython: PythonWorker | undefined;
   try {
     const context: PythonToolRuntimeContext = {
       sessionId: randomUUID(),
@@ -250,10 +256,13 @@ export async function probeBackendEnv(
       agentName: "backend_env_test",
     };
     const definitions = await discoverPythonTools(config.cwd, config.toolDirectories);
+    ownedPython = sharedPython ? undefined : new PythonWorker(config.cwd, config.python, definitions);
+    const python = sharedPython ?? ownedPython!;
+    await ownedPython?.start();
     const tools = createPythonAgentTools(
       definitions,
       ["task_state_upsert", "shopping_env"],
-      config.python,
+      python,
       () => context,
     ) as PythonTool[];
     const upsert = findPythonTool(tools, "task_state_upsert");
@@ -306,6 +315,7 @@ export async function probeBackendEnv(
     validateSampleSummaries(samples, scenario, config);
     return samples;
   } finally {
+    await ownedPython?.close();
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
 }
@@ -420,8 +430,8 @@ export async function runBackendEnvTest(
   const taskIds: string[] = [];
 
   for (const [index, scenario] of scenarios.entries()) {
-    const firstProbe = [...await probe(scenario, app.config)];
-    const secondProbe = [...await probe(scenario, app.config)];
+    const firstProbe = [...await probe(scenario, app.config, app.python)];
+    const secondProbe = [...await probe(scenario, app.config, app.python)];
     validateSampleSummaries(firstProbe, scenario, app.config);
     validateSampleSummaries(secondProbe, scenario, app.config);
     if (!isDeepStrictEqual(firstProbe, secondProbe)) {

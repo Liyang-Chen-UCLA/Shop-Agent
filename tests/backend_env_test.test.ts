@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -189,8 +190,12 @@ test("fails when a required market artifact is missing", async () => {
   }
 });
 
-test("probes the real dog-food backend env without creating a model run", async () => {
+test("probes the real dog-food backend env without creating a model run", async (context) => {
   const config = await loadConfig(projectRoot);
+  if (!existsSync(path.resolve(config.cwd, config.datasetPath))) {
+    context.skip(`configured product dataset is unavailable: ${config.datasetPath}`);
+    return;
+  }
   const scenario = BACKEND_ENV_TEST_SCENARIOS[0]!;
   const samples = await probeBackendEnv(scenario, config);
   assert.equal(samples.length, config.maxDistinctProducts);

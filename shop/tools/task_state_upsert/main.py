@@ -10,4 +10,9 @@ from task_state_common import upsert_task
 from tool_runtime import run_tool
 
 
-run_tool(upsert_task)
+def handle(arguments: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    return upsert_task(arguments, context)
+
+
+if __name__ == "__main__":
+    run_tool(handle)

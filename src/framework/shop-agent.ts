@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Agent, type AgentEvent, type ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -12,6 +11,7 @@ import { Logger } from "./logger.ts";
 import { SubagentManager } from "./subagents/manager.ts";
 import { createDelegationTool } from "./subagents/tool.ts";
 import { composeSystemPrompt } from "./system-prompt.ts";
+import { PythonWorker } from "./python-worker.ts";
 import type {
   LoadedSession,
   ResolvedAgentProfile,
@@ -26,26 +26,6 @@ import type {
 
 type Listener = (event: ShopAgentEvent) => void | Promise<void>;
 
-const PYTHON_RUNTIME_ENV = ["SystemRoot", "WINDIR", "TEMP", "TMP", "PATH", "PATHEXT", "COMSPEC"];
-
-async function verifyUvEnvironment(cwd: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("uv", ["run", "python", "-c", "pass"], {
-      cwd,
-      env: Object.fromEntries(PYTHON_RUNTIME_ENV
-        .filter((name) => process.env[name] !== undefined)
-        .map((name) => [name, process.env[name]])),
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.once("error", (error) => reject(new Error("uv is not available on PATH. Install uv and run `uv sync` before starting Shop Agent: " + error.message)));
-    child.once("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error("`uv run python` could not start the project environment (exit code " + code + "). Run `uv sync` and try again."));
-    });
-  });
-}
-
 export type CreateShopAgentOptions = {
   cwd?: string;
   configPath?: string;
@@ -59,6 +39,7 @@ export class ShopAgent {
   readonly sessions: SessionStore;
   readonly logger: Logger;
   readonly subagents: SubagentManager;
+  readonly python: PythonWorker;
   private readonly toolDefinitions: Map<string, import("./types.ts").PythonToolDefinition>;
   private readonly listeners = new Set<Listener>();
   private unsubscribeAgent?: () => void;
@@ -72,6 +53,7 @@ export class ShopAgent {
     sessions: SessionStore,
     logger: Logger,
     subagents: SubagentManager,
+    python: PythonWorker,
     toolDefinitions: Map<string, import("./types.ts").PythonToolDefinition>,
     session: LoadedSession,
     agent: Agent,
@@ -81,6 +63,7 @@ export class ShopAgent {
     this.sessions = sessions;
     this.logger = logger;
     this.subagents = subagents;
+    this.python = python;
     this.toolDefinitions = toolDefinitions;
     this.session = session;
     this.agent = agent;
@@ -89,11 +72,6 @@ export class ShopAgent {
   static async create(options: CreateShopAgentOptions = {}): Promise<ShopAgent> {
     const cwd = path.resolve(options.cwd ?? process.cwd());
     const config = await loadConfig(cwd, options.configPath, options.config);
-    await verifyUvEnvironment(cwd);
-    const runtime = createModelRuntime();
-    if (!options.skipAuthCheck) await checkOpenCodeAuth(runtime);
-    const defaultModel = runtime.getModel(config.defaultModel);
-    runtime.ensureThinking(defaultModel, config.defaultThinking);
     const definitions = await discoverPythonTools(cwd, config.toolDirectories);
     for (const profile of config.agents) {
       for (const tool of profile.tools ?? []) {
@@ -102,15 +80,26 @@ export class ShopAgent {
         }
       }
     }
-    const dataDirectory = path.resolve(cwd, config.dataDirectory);
-    const sessions = new SessionStore(dataDirectory);
-    const logger = new Logger(dataDirectory);
-    const session = await sessions.create(config.defaultModel, config.defaultThinking);
-    const subagents = new SubagentManager(config, definitions);
-    const placeholder = new Agent({ streamFn: runtime.streamSimple });
-    const app = new ShopAgent(config, runtime, sessions, logger, subagents, definitions, session, placeholder);
-    app.replaceAgent(app.buildAgent(session));
-    return app;
+    const python = new PythonWorker(cwd, config.python, definitions);
+    await python.start();
+    try {
+      const runtime = createModelRuntime();
+      if (!options.skipAuthCheck) await checkOpenCodeAuth(runtime);
+      const defaultModel = runtime.getModel(config.defaultModel);
+      runtime.ensureThinking(defaultModel, config.defaultThinking);
+      const dataDirectory = path.resolve(cwd, config.dataDirectory);
+      const sessions = new SessionStore(dataDirectory);
+      const logger = new Logger(dataDirectory);
+      const session = await sessions.create(config.defaultModel, config.defaultThinking);
+      const subagents = new SubagentManager(config, definitions, python);
+      const placeholder = new Agent({ streamFn: runtime.streamSimple });
+      const app = new ShopAgent(config, runtime, sessions, logger, subagents, python, definitions, session, placeholder);
+      app.replaceAgent(app.buildAgent(session));
+      return app;
+    } catch (error) {
+      await python.close();
+      throw error;
+    }
   }
 
   private get orchestrator(): ResolvedAgentProfile {
@@ -128,7 +117,7 @@ export class ShopAgent {
     const pythonTools = createPythonAgentTools(
       this.toolDefinitions,
       pythonAllowlist,
-      this.config.python,
+      this.python,
       () => ({
         sessionId: this.session.metadata.id,
         dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
@@ -210,6 +199,14 @@ export class ShopAgent {
 
   abort(): void {
     this.agent.abort();
+  }
+
+  async close(): Promise<void> {
+    this.abort();
+    this.unsubscribeAgent?.();
+    this.unsubscribeAgent = undefined;
+    await this.subagents.close();
+    await this.python.close();
   }
 
   async newSession(): Promise<SessionMetadata> {

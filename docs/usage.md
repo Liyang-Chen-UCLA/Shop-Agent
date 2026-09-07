@@ -22,7 +22,7 @@ turn:
 node src/cli.ts --multi-turn-test
 ```
 
-This mode requires `OPENCODE_API_KEY`, a usable uv project environment, and
+This mode requires `OPENCODE_API_KEY`, a provisioned repo-local `.venv`, and
 the normal taxonomy tools because it exercises the real model chain. It emits
 one JSON Lines record per turn containing the user input, final assistant text,
 and `app.getTaskState()` result. The offline node:test fake-app coverage does
@@ -38,12 +38,12 @@ market artifacts:
 node src/cli.ts --backend-env-test
 ```
 
-The backend-env mode also requires `OPENCODE_API_KEY`, a usable uv project
-environment, and the configured product dataset. Its JSON Lines output includes only each environment sample's
+The backend-env mode also requires `OPENCODE_API_KEY`, a provisioned repo-local `.venv`,
+and the configured product dataset. Its JSON Lines output includes only each environment sample's
 category, item id, rank, and sample index (never the full OCR text). A missing
 or mismatched market artifact causes a non-zero exit.
 
-Validate configuration, authentication visibility, profiles, model metadata, the uv environment, required Python imports, and tool manifests without opening the TUI:
+Validate configuration, authentication visibility, profiles, model metadata, `.venv` dependencies, and tool manifests without opening the TUI. The check may verify that uv is installed but does not execute it:
 
 ```powershell
 .\start.ps1 -Check
@@ -57,7 +57,7 @@ Show full error stacks in the TUI and write diagnostics to `.shop-agent/logs/sho
 
 No npm command, package publication, link, or compilation step is part of this workflow.
 
-Python dependencies are declared in `pyproject.toml` and locked in `uv.lock`. Install the project environment with uv; the runtime always invokes Python through `uv run python`.
+Python dependencies are declared in `pyproject.toml` and locked in `uv.lock`. Provision the repo-local environment with uv. Normal startup never invokes uv; tools, trusted validators, and task state calls reuse the one `.venv` worker owned by the app.
 
 ```powershell
 uv sync --locked

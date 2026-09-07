@@ -13,9 +13,14 @@ import { isDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticAgentEvent,
 import { validateJsonSchema } from "../src/framework/schema.ts";
 import { SessionStore } from "../src/framework/session-store.ts";
 import { createShopAgent } from "../src/framework/shop-agent.ts";
+import { PythonWorker } from "../src/framework/python-worker.ts";
 import { renderRunCard, renderTaskState, summarizeValue } from "../src/tui/presentation.ts";
 
 const cwd = path.resolve(import.meta.dirname, "..");
+const workerDefinitions = await discoverPythonTools(cwd, ["shop/tools", "tests/fixtures"]);
+const testPython = new PythonWorker(cwd, { timeoutMs: 30_000, envAllowlist: [] }, workerDefinitions);
+await testPython.start();
+test.after(async () => testPython.close());
 
 test("loads project config and OpenCode Go model catalog", async () => {
   const config = await loadConfig(cwd);
@@ -109,7 +114,7 @@ test("injects OpenCode Go session headers after existing header transforms", asy
   assert.equal(headersWithoutSession["x-opencode-client"], undefined);
 });
 
-test("uses uv for the project Python environment", async () => {
+test("uses the configured persistent Python worker timeout and env allowlist", async () => {
   const config = await loadConfig(cwd);
   assert.deepEqual(config.python, { timeoutMs: 60_000, envAllowlist: [] });
 });
@@ -190,8 +195,7 @@ test("output validation controller steers one repair and never succeeds after a 
   const steers: unknown[] = [];
   const controller = createOutputValidationController({
     profile,
-    python: { timeoutMs: 10_000, envAllowlist: [] },
-    projectRoot: cwd,
+    python: testPython,
     steer: (message) => steers.push(message),
     validateTrusted: async (_validator, value) => value && (value as { ok?: unknown }).ok === true
       ? { valid: true, value }
@@ -207,8 +211,7 @@ test("output validation controller steers one repair and never succeeds after a 
   const failedSteers: unknown[] = [];
   const failed = createOutputValidationController({
     profile,
-    python: { timeoutMs: 10_000, envAllowlist: [] },
-    projectRoot: cwd,
+    python: testPython,
     steer: (message) => failedSteers.push(message),
     validateTrusted: async () => ({ valid: false, error: "still invalid" }),
   });
@@ -235,8 +238,7 @@ test("invalid JSON diagnostics expose only stop reason and character count", asy
   const steers: any[] = [];
   const controller = createOutputValidationController({
     profile,
-    python: { timeoutMs: 10_000, envAllowlist: [] },
-    projectRoot: cwd,
+    python: testPython,
     steer: (message) => steers.push(message),
     validateTrusted: async () => ({ valid: true }),
   });
@@ -312,13 +314,13 @@ test("trusted criteria validator accepts a minimal document and rejects semantic
     node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
     criteria: [],
     attributes: [],
-  }, { timeoutMs: 10_000, envAllowlist: [] }, cwd);
+  }, testPython);
   assert.equal(valid.valid, true);
   const invalid = await validateWithTrustedValidator({ id: "criteria_v1" }, {
     node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
     criteria: [{ id: "battery_life", name: "续航", description: "d", aliases: [], type: "numeric", units: [], direction: { type: "target_range", unit: "小时" } }],
     attributes: [],
-  }, { timeoutMs: 10_000, envAllowlist: [] }, cwd);
+  }, testPython);
   assert.equal(invalid.valid, false);
 });
 
@@ -364,11 +366,8 @@ test("formats safe TUI summaries, run cards, and task state", () => {
 });
 
 test("runs a manifest-based Python tool without leaking OPENCODE_API_KEY", async () => {
-  const definitions = await discoverPythonTools(cwd, ["tests/fixtures"]);
-  const tools = createPythonAgentTools(definitions, ["echo_python"], {
-    timeoutMs: 10_000,
-    envAllowlist: [],
-  });
+  const definitions = workerDefinitions;
+  const tools = createPythonAgentTools(definitions, ["echo_python"], testPython);
   const previous = process.env.OPENCODE_API_KEY;
   process.env.OPENCODE_API_KEY = "must-not-reach-python";
   try {
@@ -401,14 +400,11 @@ test("persists and resumes project sessions as JSONL", async () => {
 });
 
 test("queries canonical taxonomy nodes and direct children in batches", async () => {
-  const definitions = await discoverPythonTools(cwd, ["shop/tools"]);
+  const definitions = workerDefinitions;
   const tools = createPythonAgentTools(
     definitions,
     ["taxonomy_search_nodes", "taxonomy_get_nodes", "taxonomy_get_children"],
-    {
-      timeoutMs: 10_000,
-      envAllowlist: [],
-    },
+    testPython,
   );
   const search = await tools[0].execute("taxonomy-search", { queries: ["手机", "耳机"], limit: 3 });
   const searchValue = JSON.parse((search.content[0] as { text: string }).text) as {
@@ -436,16 +432,12 @@ test("queries canonical taxonomy nodes and direct children in batches", async ()
 test("persists minimal task state per trusted session with LangGraph SQLite", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-state-test-"));
   try {
-    const definitions = await discoverPythonTools(cwd, ["shop/tools"]);
-    const config = {
-      timeoutMs: 30_000,
-      envAllowlist: [],
-    };
+    const definitions = workerDefinitions;
     const context = (sessionId: string) => ({ sessionId, dataDirectory: directory });
     const sessionATools = createPythonAgentTools(
       definitions,
       ["task_state_get", "task_state_upsert"],
-      config,
+      testPython,
       () => context("session-a"),
     );
     const empty = await sessionATools[0].execute("state-empty", {});
@@ -492,7 +484,7 @@ test("persists minimal task state per trusted session with LangGraph SQLite", as
     const sessionBTools = createPythonAgentTools(
       definitions,
       ["task_state_get"],
-      config,
+      testPython,
       () => context("session-b"),
     );
     const isolated = await sessionBTools[0].execute("state-isolated", {});
@@ -504,8 +496,9 @@ test("persists minimal task state per trusted session with LangGraph SQLite", as
 
 test("creates an interactive orchestrator with state tools and focused subagents", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-app-test-"));
+  let app: Awaited<ReturnType<typeof createShopAgent>> | undefined;
   try {
-    const app = await createShopAgent({
+    app = await createShopAgent({
       cwd,
       skipAuthCheck: true,
       config: { dataDirectory: directory },
@@ -525,6 +518,7 @@ test("creates an interactive orchestrator with state tools and focused subagents
     const state = await app.getTaskState();
     assert.deepEqual(state.tasks, []);
   } finally {
+    await app?.close();
     await rm(directory, { recursive: true, force: true });
   }
 });

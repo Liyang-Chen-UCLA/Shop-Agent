@@ -1,20 +1,20 @@
 # Persistent Python worker
 
-## Current design
+## Status
 
-Each Python tool call starts an isolated Python process, exchanges one request and response over stdin/stdout, and exits.
+Completed. Shop Agent now owns one project-level `.venv` Python worker.
 
-## Target design
+## Implemented design
 
-Replace the one-shot runner with a project-level persistent worker using a framed JSON Lines or RPC protocol. Preserve the existing tool manifests, request envelope, response envelope, timeouts, cancellation, schema validation, and environment allowlists.
+The worker uses JSONL RPC and a fixed tool/validator registry. The orchestrator calls it through `PythonExecutor`; child runners use `ChildPythonProxy`, with parent-side permission checks before forwarding. Requests are serial, per-call environments are restored, stdout is protocol-only, and crashes or running cancellation trigger one restart without replay.
 
-## Why deferred
+## Setup boundary
 
-One-shot execution is simpler to debug and prevents state leakage while the business tool set is still evolving.
+`uv sync --locked` creates and maintains `.venv`. Runtime resolves only `.venv/Scripts/python.exe` on Windows or `.venv/bin/python` elsewhere and never invokes uv or a system Python fallback.
 
-## Migration trigger
+## Lifecycle
 
-Repeated Python startup becomes a measurable share of tool latency, or a tool needs cached models, sessions, or connection pools.
+`ShopAgent.create()` starts and initializes the worker before building agents. `ShopAgent.close()` aborts the agent, closes child runners, cancels Python requests, requests worker shutdown, and force-kills it if necessary.
 
 ## Acceptance criteria
 
@@ -22,4 +22,4 @@ Repeated Python startup becomes a measurable share of tool latency, or a tool ne
 - Requests have independent cancellation and timeouts.
 - A failed request cannot corrupt later responses.
 - No additional environment variables become visible to Python.
-- Existing one-shot tools continue to work without manifest changes.
+- Existing tool manifests continue to work without schema changes; modules expose `handle(arguments, context)` and retain CLI debugging entry points.

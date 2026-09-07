@@ -18,4 +18,5 @@ def handle(arguments: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any
     return {"results": get_children(normalized)}
 
 
-run_tool(handle)
+if __name__ == "__main__":
+    run_tool(handle)

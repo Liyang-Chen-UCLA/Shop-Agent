@@ -10,40 +10,42 @@ function argument(name: string): string | undefined {
 }
 
 async function main(): Promise<void> {
-  const app = await createShopAgent({
-    cwd: process.cwd(),
-    configPath: argument("--config"),
-  });
+  let app: Awaited<ReturnType<typeof createShopAgent>> | undefined;
+  try {
+    app = await createShopAgent({ cwd: process.cwd(), configPath: argument("--config") });
 
-  if (process.argv.includes("--check")) {
-    process.stdout.write(`Shop Agent configuration is valid.\n`);
-    process.stdout.write(`Provider: opencode-go\n`);
-    process.stdout.write(`Model: ${app.currentSession.model}\n`);
-    process.stdout.write(`Agents: ${app.listAgents().map((agent) => agent.id).join(", ")}\n`);
-    process.stdout.write(`Python: uv run python\n`);
-    return;
+    if (process.argv.includes("--check")) {
+      process.stdout.write(`Shop Agent configuration is valid.\n`);
+      process.stdout.write(`Provider: opencode-go\n`);
+      process.stdout.write(`Model: ${app.currentSession.model}\n`);
+      process.stdout.write(`Agents: ${app.listAgents().map((agent) => agent.id).join(", ")}\n`);
+      process.stdout.write(`Python: .venv persistent worker\n`);
+      return;
+    }
+
+    if (process.argv.includes("--multi-turn-test")) {
+      await runMultiTurnTest(app, {
+        onTurn: (turn) => {
+          process.stdout.write(`${formatMultiTurnTestTurn(turn)}\n`);
+        },
+      });
+      return;
+    }
+
+    if (process.argv.includes("--backend-env-test")) {
+      await runBackendEnvTest(app, {
+        onTurn: (turn) => {
+          process.stdout.write(`${formatBackendEnvTestTurn(turn)}\n`);
+        },
+      });
+      return;
+    }
+
+    const tui = new ShopAgentTui(app, process.argv.includes("--debug"));
+    await tui.run();
+  } finally {
+    await app?.close();
   }
-
-  if (process.argv.includes("--multi-turn-test")) {
-    await runMultiTurnTest(app, {
-      onTurn: (turn) => {
-        process.stdout.write(`${formatMultiTurnTestTurn(turn)}\n`);
-      },
-    });
-    return;
-  }
-
-  if (process.argv.includes("--backend-env-test")) {
-    await runBackendEnvTest(app, {
-      onTurn: (turn) => {
-        process.stdout.write(`${formatBackendEnvTestTurn(turn)}\n`);
-      },
-    });
-    return;
-  }
-
-  const tui = new ShopAgentTui(app, process.argv.includes("--debug"));
-  await tui.run();
 }
 
 main().catch((error) => {

@@ -339,6 +339,12 @@ def validate_criteria_document(value: object) -> CriteriaDocument:
     return CriteriaDocument.model_validate(value)
 
 
+def handle(value: object, _context: dict[str, object]) -> object:
+    """Worker-compatible trusted validator entry point."""
+
+    return validate_criteria_document(value).model_dump(mode="json")
+
+
 # Friendly aliases for callers that use the shorter contract terminology.
 CriteriaResult = CriteriaDocument
 CriteriaContract = CriteriaDocument

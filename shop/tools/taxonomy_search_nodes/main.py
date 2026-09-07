@@ -20,4 +20,5 @@ def handle(arguments: dict[str, Any], _context: dict[str, Any]) -> dict[str, Any
     return {"results": search_nodes([item.strip() for item in queries], max(1, min(limit, 10)))}
 
 
-run_tool(handle)
+if __name__ == "__main__":
+    run_tool(handle)
