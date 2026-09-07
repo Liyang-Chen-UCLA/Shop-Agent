@@ -107,7 +107,7 @@ export class ShopAgent {
     const logger = new Logger(dataDirectory);
     const session = await sessions.create(config.defaultModel, config.defaultThinking);
     const subagents = new SubagentManager(config, definitions);
-    const placeholder = new Agent({ streamFn: runtime.models.streamSimple.bind(runtime.models) });
+    const placeholder = new Agent({ streamFn: runtime.streamSimple });
     const app = new ShopAgent(config, runtime, sessions, logger, subagents, definitions, session, placeholder);
     app.replaceAgent(app.buildAgent(session));
     return app;
@@ -164,7 +164,7 @@ export class ShopAgent {
         tools,
         messages: session.messages,
       },
-      streamFn: this.runtime.models.streamSimple.bind(this.runtime.models),
+      streamFn: this.runtime.streamSimple,
       sessionId: session.metadata.id,
       toolExecution: "sequential",
     });

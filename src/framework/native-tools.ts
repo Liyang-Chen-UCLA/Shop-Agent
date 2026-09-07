@@ -125,7 +125,7 @@ async function runIsolatedSearch(
       tools: [],
       messages: [],
     },
-    streamFn: runtime.models.streamSimple.bind(runtime.models),
+    streamFn: runtime.streamSimple,
     sessionId: `web-search-${randomUUID()}`,
     toolExecution: "sequential",
   });

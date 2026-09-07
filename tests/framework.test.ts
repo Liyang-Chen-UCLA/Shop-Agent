@@ -74,6 +74,41 @@ test("resolves to the highest supported thinking level when no higher level exis
   assert.equal(resolveThinking(model, "minimal"), "high");
 });
 
+test("injects OpenCode Go session headers after existing header transforms", async () => {
+  const runtime = createModelRuntime();
+  const model = runtime.getModel("hy3");
+  let capturedOptions: Parameters<typeof runtime.models.streamSimple>[2] | undefined;
+  runtime.models.streamSimple = (_model, _context, options) => {
+    capturedOptions = options;
+    return {} as never;
+  };
+
+  runtime.streamSimple(model, { messages: [] }, {
+    sessionId: "session-main",
+    transformHeaders: (headers) => ({
+      ...headers,
+      "x-opencode-session": "transformed-session",
+      "X-OpenCode-Client": "transformed-client",
+      "x-test": "kept",
+    }),
+  });
+
+  assert.ok(capturedOptions?.transformHeaders);
+  assert.deepEqual(await capturedOptions.transformHeaders({ authorization: "token" }), {
+    authorization: "token",
+    "x-test": "kept",
+    "x-opencode-session": "session-main",
+    "x-opencode-client": "pi",
+  });
+
+  capturedOptions = undefined;
+  runtime.streamSimple(model, { messages: [] });
+  assert.ok(capturedOptions?.transformHeaders);
+  const headersWithoutSession = await capturedOptions.transformHeaders({ "x-test": "kept" });
+  assert.equal(headersWithoutSession["x-opencode-session"], undefined);
+  assert.equal(headersWithoutSession["x-opencode-client"], undefined);
+});
+
 test("uses uv for the project Python environment", async () => {
   const config = await loadConfig(cwd);
   assert.deepEqual(config.python, { timeoutMs: 60_000, envAllowlist: [] });

@@ -3,6 +3,7 @@ import {
   getSupportedThinkingLevels,
   type Model,
   type Models,
+  type ProviderHeaders,
 } from "@earendil-works/pi-ai";
 import { opencodeGoProvider } from "@earendil-works/pi-ai/providers/opencode-go";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
@@ -11,11 +12,27 @@ const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "med
 
 export type ModelRuntime = {
   models: Models;
+  streamSimple: Models["streamSimple"];
   getModel(id: string): Model<any>;
   listModels(): readonly Model<any>[];
   resolveThinking(model: Model<any>, level: ThinkingLevel): ThinkingLevel;
   ensureThinking(model: Model<any>, level: ThinkingLevel): void;
 };
+
+function injectOpenCodeSessionHeaders(headers: ProviderHeaders, sessionId: string): ProviderHeaders {
+  const withoutOpenCodeSessionHeaders = Object.fromEntries(
+    Object.entries(headers).filter(([name]) => {
+      const normalized = name.toLowerCase();
+      return normalized !== "x-opencode-session" && normalized !== "x-opencode-client";
+    }),
+  );
+
+  return {
+    ...withoutOpenCodeSessionHeaders,
+    "x-opencode-session": sessionId,
+    "x-opencode-client": "pi",
+  };
+}
 
 /**
  * Resolve a persisted thinking level for a target model without reducing it
@@ -43,8 +60,23 @@ export function createModelRuntime(): ModelRuntime {
   const models = createModels();
   models.setProvider(opencodeGoProvider());
 
+  const streamSimple: Models["streamSimple"] = (model, context, options) => {
+    const transformHeaders = options?.transformHeaders;
+    const sessionId = options?.sessionId;
+
+    return models.streamSimple(model, context, {
+      ...options,
+      transformHeaders: async (headers) => {
+        const transformedHeaders = transformHeaders ? await transformHeaders(headers) : headers;
+        if (model.provider !== "opencode-go" || !sessionId) return transformedHeaders;
+        return injectOpenCodeSessionHeaders(transformedHeaders, sessionId);
+      },
+    });
+  };
+
   return {
     models,
+    streamSimple,
     getModel(id: string) {
       const model = models.getModel("opencode-go", id);
       if (!model) throw new Error(`Unknown OpenCode Go model: ${id}`);

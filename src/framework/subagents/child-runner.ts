@@ -64,7 +64,7 @@ async function main(): Promise<void> {
       tools,
       messages: [],
     },
-    streamFn: runtime.models.streamSimple.bind(runtime.models),
+    streamFn: runtime.streamSimple,
     sessionId: request.runId,
     toolExecution: "sequential",
     shouldStopAfterTurn: validationController.shouldStopAfterTurn,
