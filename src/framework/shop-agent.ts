@@ -26,16 +26,22 @@ import type {
 
 type Listener = (event: ShopAgentEvent) => void | Promise<void>;
 
-async function verifyPythonExecutable(executable: string): Promise<void> {
+const PYTHON_RUNTIME_ENV = ["SystemRoot", "WINDIR", "TEMP", "TMP", "PATH", "PATHEXT", "COMSPEC"];
+
+async function verifyUvEnvironment(cwd: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(executable, ["-c", "pass"], {
+    const child = spawn("uv", ["run", "python", "-c", "pass"], {
+      cwd,
+      env: Object.fromEntries(PYTHON_RUNTIME_ENV
+        .filter((name) => process.env[name] !== undefined)
+        .map((name) => [name, process.env[name]])),
       stdio: "ignore",
       windowsHide: true,
     });
-    child.once("error", (error) => reject(new Error("Python executable '" + executable + "' is not available: " + error.message)));
+    child.once("error", (error) => reject(new Error("uv is not available on PATH. Install uv and run `uv sync` before starting Shop Agent: " + error.message)));
     child.once("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error("Python executable '" + executable + "' exited with code " + code + " during startup check."));
+      else reject(new Error("`uv run python` could not start the project environment (exit code " + code + "). Run `uv sync` and try again."));
     });
   });
 }
@@ -83,7 +89,7 @@ export class ShopAgent {
   static async create(options: CreateShopAgentOptions = {}): Promise<ShopAgent> {
     const cwd = path.resolve(options.cwd ?? process.cwd());
     const config = await loadConfig(cwd, options.configPath, options.config);
-    await verifyPythonExecutable(config.python.executable);
+    await verifyUvEnvironment(cwd);
     const runtime = createModelRuntime();
     if (!options.skipAuthCheck) await checkOpenCodeAuth(runtime);
     const defaultModel = runtime.getModel(config.defaultModel);

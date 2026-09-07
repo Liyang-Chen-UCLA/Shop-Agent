@@ -33,7 +33,7 @@ function validationError(value: unknown): string {
 /**
  * Invoke one explicitly registered trusted validator.  The validator receives
  * only the candidate JSON and returns a small `{ok,result|error}` envelope;
- * no model-authored path or executable is accepted here.
+ * no model-authored path or command is accepted here.
  */
 export async function validateWithTrustedValidator(
   validator: OutputValidatorConfig,
@@ -50,7 +50,7 @@ export async function validateWithTrustedValidator(
     let settled = false;
     let stdout = "";
     let stderr = "";
-    const child = spawn(python.executable, ["-X", "utf8", entryPath], {
+    const child = spawn("uv", ["run", "python", "-X", "utf8", entryPath], {
       cwd: projectRoot,
       env: {
         SystemRoot: process.env.SystemRoot,

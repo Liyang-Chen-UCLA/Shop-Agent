@@ -1,0 +1,10 @@
+[project]
+name = "shop-agent"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "langgraph==1.2.11",
+    "langgraph-checkpoint-sqlite==3.1.1",
+    "pyarrow==25.0.1",
+    "pydantic==2.13.5",
+]

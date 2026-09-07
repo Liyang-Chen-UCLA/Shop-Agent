@@ -13,7 +13,6 @@ import { listTrustedOutputValidators } from "./output-validator.ts";
 
 const FALLBACK_ORCHESTRATOR_PROMPT = "Route each request to an available focused subagent when useful, then synthesize its result.";
 const FALLBACK_DELEGATE_PROMPT = "Complete the one bounded task provided by the orchestrator and return a self-contained result.";
-const DEFAULT_PYTHON_EXECUTABLE = "python";
 
 export const DEFAULT_CONFIG: ShopAgentConfig = {
   provider: "opencode-go",
@@ -39,7 +38,6 @@ export const DEFAULT_CONFIG: ShopAgentConfig = {
   ],
   toolDirectories: ["shop/tools"],
   python: {
-    executable: DEFAULT_PYTHON_EXECUTABLE,
     timeoutMs: 60_000,
     envAllowlist: [],
   },
@@ -62,16 +60,15 @@ async function exists(filePath: string): Promise<boolean> {
 }
 
 function mergeConfig(input: ShopAgentConfigInput): ShopAgentConfig {
-  const environmentPython = process.env.SHOP_AGENT_PYTHON?.trim();
+  const pythonInput = input.python ?? {};
   return {
     ...DEFAULT_CONFIG,
     ...input,
     agents: input.agents ?? DEFAULT_CONFIG.agents,
     toolDirectories: input.toolDirectories ?? DEFAULT_CONFIG.toolDirectories,
     python: {
-      ...DEFAULT_CONFIG.python,
-      executable: environmentPython || DEFAULT_CONFIG.python.executable,
-      ...input.python,
+      timeoutMs: pythonInput.timeoutMs ?? DEFAULT_CONFIG.python.timeoutMs,
+      envAllowlist: pythonInput.envAllowlist ?? DEFAULT_CONFIG.python.envAllowlist,
     },
   };
 }

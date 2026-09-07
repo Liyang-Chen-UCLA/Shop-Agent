@@ -16,8 +16,6 @@ import { createShopAgent } from "../src/framework/shop-agent.ts";
 import { renderRunCard, renderTaskState, summarizeValue } from "../src/tui/presentation.ts";
 
 const cwd = path.resolve(import.meta.dirname, "..");
-const pythonExecutable = process.env.SHOP_AGENT_PYTHON?.trim() || "python";
-const criteriaPythonExecutable = process.env.SHOP_AGENT_PYTHON?.trim() || "F:\\Anaconda3\\envs\\shop-agent\\python.exe";
 
 test("loads project config and OpenCode Go model catalog", async () => {
   const config = await loadConfig(cwd);
@@ -38,21 +36,9 @@ test("loads project config and OpenCode Go model catalog", async () => {
   runtime.ensureThinking(model, "medium");
 });
 
-test("selects Python executable from the environment unless config overrides it", async () => {
-  const previous = process.env.SHOP_AGENT_PYTHON;
-  process.env.SHOP_AGENT_PYTHON = "python-from-environment";
-  try {
-    const environmentConfig = await loadConfig(cwd);
-    assert.equal(environmentConfig.python.executable, "python-from-environment");
-
-    const explicitConfig = await loadConfig(cwd, undefined, {
-      python: { executable: "python-from-config" },
-    });
-    assert.equal(explicitConfig.python.executable, "python-from-config");
-  } finally {
-    if (previous === undefined) delete process.env.SHOP_AGENT_PYTHON;
-    else process.env.SHOP_AGENT_PYTHON = previous;
-  }
+test("uses uv for the project Python environment", async () => {
+  const config = await loadConfig(cwd);
+  assert.deepEqual(config.python, { timeoutMs: 60_000, envAllowlist: [] });
 });
 
 test("validates the JSON Schema subset used by tool manifests", () => {
@@ -131,7 +117,7 @@ test("output validation controller steers one repair and never succeeds after a 
   const steers: unknown[] = [];
   const controller = createOutputValidationController({
     profile,
-    python: { executable: pythonExecutable, timeoutMs: 10_000, envAllowlist: [] },
+    python: { timeoutMs: 10_000, envAllowlist: [] },
     projectRoot: cwd,
     steer: (message) => steers.push(message),
     validateTrusted: async (_validator, value) => value && (value as { ok?: unknown }).ok === true
@@ -148,7 +134,7 @@ test("output validation controller steers one repair and never succeeds after a 
   const failedSteers: unknown[] = [];
   const failed = createOutputValidationController({
     profile,
-    python: { executable: pythonExecutable, timeoutMs: 10_000, envAllowlist: [] },
+    python: { timeoutMs: 10_000, envAllowlist: [] },
     projectRoot: cwd,
     steer: (message) => failedSteers.push(message),
     validateTrusted: async () => ({ valid: false, error: "still invalid" }),
@@ -176,7 +162,7 @@ test("invalid JSON diagnostics expose only stop reason and character count", asy
   const steers: any[] = [];
   const controller = createOutputValidationController({
     profile,
-    python: { executable: pythonExecutable, timeoutMs: 10_000, envAllowlist: [] },
+    python: { timeoutMs: 10_000, envAllowlist: [] },
     projectRoot: cwd,
     steer: (message) => steers.push(message),
     validateTrusted: async () => ({ valid: true }),
@@ -253,13 +239,13 @@ test("trusted criteria validator accepts a minimal document and rejects semantic
     node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
     criteria: [],
     attributes: [],
-  }, { executable: criteriaPythonExecutable, timeoutMs: 10_000, envAllowlist: [] }, cwd);
+  }, { timeoutMs: 10_000, envAllowlist: [] }, cwd);
   assert.equal(valid.valid, true);
   const invalid = await validateWithTrustedValidator({ id: "criteria_v1" }, {
     node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
     criteria: [{ id: "battery_life", name: "续航", description: "d", aliases: [], type: "numeric", units: [], direction: { type: "target_range", unit: "小时" } }],
     attributes: [],
-  }, { executable: criteriaPythonExecutable, timeoutMs: 10_000, envAllowlist: [] }, cwd);
+  }, { timeoutMs: 10_000, envAllowlist: [] }, cwd);
   assert.equal(invalid.valid, false);
 });
 
@@ -307,7 +293,6 @@ test("formats safe TUI summaries, run cards, and task state", () => {
 test("runs a manifest-based Python tool without leaking OPENCODE_API_KEY", async () => {
   const definitions = await discoverPythonTools(cwd, ["tests/fixtures"]);
   const tools = createPythonAgentTools(definitions, ["echo_python"], {
-    executable: pythonExecutable,
     timeoutMs: 10_000,
     envAllowlist: [],
   });
@@ -348,7 +333,6 @@ test("queries canonical taxonomy nodes and direct children in batches", async ()
     definitions,
     ["taxonomy_search_nodes", "taxonomy_get_nodes", "taxonomy_get_children"],
     {
-      executable: pythonExecutable,
       timeoutMs: 10_000,
       envAllowlist: [],
     },
@@ -381,7 +365,6 @@ test("persists minimal task state per trusted session with LangGraph SQLite", as
   try {
     const definitions = await discoverPythonTools(cwd, ["shop/tools"]);
     const config = {
-      executable: pythonExecutable,
       timeoutMs: 30_000,
       envAllowlist: [],
     };

@@ -7,6 +7,8 @@ Shop Agent keeps the product-facing business workspace separate from the reusabl
 ```text
 root
 ├─ start.ps1                 user launch entry
+├─ pyproject.toml             Python project dependencies
+├─ uv.lock                    locked Python environment
 ├─ shop-agent.config.ts      thin configuration entry
 ├─ shop/                     business extension workspace
 │  ├─ agents.ts              profiles and tool allowlists
@@ -61,7 +63,7 @@ records with framework-injected session/agent metadata to
 
 Python tools are discovered from `shop/tools/**/tool.json`, but discovery does not expose them automatically. A profile in `shop/agents.ts` must explicitly include the tool name.
 
-Every call starts the configured Python executable in UTF-8 mode, sends one JSON request over stdin, and validates the JSON response against the manifest output schema. Set `SHOP_AGENT_PYTHON` to select the executable; the default is `python` from `PATH`. Python receives only the Windows runtime variables and explicitly allowlisted business variables; it does not inherit `OPENCODE_API_KEY` by default.
+Every call starts `uv run python` in UTF-8 mode, sends one JSON request over stdin, and validates the JSON response against the manifest output schema. The project environment is declared in `pyproject.toml` and locked in `uv.lock`; Python receives only the Windows runtime variables and explicitly allowlisted business variables, so it does not inherit `OPENCODE_API_KEY` by default.
 
 For tools used by the main orchestrator, the framework injects a trusted runtime context containing the current session ID and data-directory path. These values are outside the model-authored arguments. LangGraph state tools use that session ID as the SQLite checkpoint thread key, preventing a model from choosing another session's state.
 

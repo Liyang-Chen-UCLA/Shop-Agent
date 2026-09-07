@@ -36,7 +36,6 @@ export type OutputValidatorConfig = {
 };
 
 export type PythonConfig = {
-  executable: string;
   timeoutMs: number;
   envAllowlist: string[];
 };

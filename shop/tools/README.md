@@ -38,7 +38,7 @@ Example manifest:
 }
 ```
 
-The runner starts `D:\App\miniforge3\envs\shop-agent\python.exe`, sends one JSON object to stdin, and expects exactly one JSON object on stdout. Write logs to stderr.
+The runner starts `uv run python` from the project environment, sends one JSON object to stdin, and expects exactly one JSON object on stdout. Write logs to stderr.
 
 Input (the runtime injects `context`; it is not supplied by the model):
 

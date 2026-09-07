@@ -92,7 +92,7 @@ async function executePythonTool(
 ): Promise<unknown> {
   const timeoutMs = definition.timeoutMs ?? config.timeoutMs;
   return new Promise((resolve, reject) => {
-    const child = spawn(config.executable, ["-X", "utf8", definition.entry], {
+    const child = spawn("uv", ["run", "python", "-X", "utf8", definition.entry], {
       cwd: definition.directory,
       env: buildEnvironment(config, definition),
       stdio: ["pipe", "pipe", "pipe"],

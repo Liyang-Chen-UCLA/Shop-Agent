@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,15 +18,6 @@ import { loadConfig } from "../src/framework/config.ts";
 import type { TaskState } from "../src/framework/types.ts";
 
 const projectRoot = path.resolve(import.meta.dirname, "..");
-
-function projectPythonExecutable(): string {
-  const configured = process.env.SHOP_AGENT_PYTHON?.trim();
-  if (configured) return configured;
-  return [
-    "D:\\App\\miniforge3\\envs\\shop-agent\\python.exe",
-    "F:\\Anaconda3\\envs\\shop-agent\\python.exe",
-  ].find((candidate) => existsSync(candidate)) ?? "python";
-}
 
 function makeState(tasks: TaskState["tasks"]): TaskState {
   return {
@@ -125,7 +115,7 @@ async function fixture() {
     dataDirectory: directory,
     datasetPath: path.join(directory, "products.parquet"),
     maxDistinctProducts: 5,
-    python: { executable: "python", timeoutMs: 10_000, envAllowlist: [] },
+    python: { timeoutMs: 10_000, envAllowlist: [] },
     toolDirectories: ["shop/tools"],
   };
   const [dogFood, tableTennis, phoneLight] = BACKEND_ENV_TEST_SCENARIOS;
@@ -200,9 +190,7 @@ test("fails when a required market artifact is missing", async () => {
 });
 
 test("probes the real dog-food backend env without creating a model run", async () => {
-  const config = await loadConfig(projectRoot, undefined, {
-    python: { executable: projectPythonExecutable() },
-  });
+  const config = await loadConfig(projectRoot);
   const scenario = BACKEND_ENV_TEST_SCENARIOS[0]!;
   const samples = await probeBackendEnv(scenario, config);
   assert.equal(samples.length, config.maxDistinctProducts);

@@ -10,7 +10,7 @@ This directory is the only place for Shop Agent business extensions:
 - `skills/market-alignment/SKILL.md` is explicitly loaded into `market_agent`.
 - `tools/` contains manifest-based Python tools.
 - `data/` contains the canonical product taxonomy used by the route agent.
-- `requirements.txt` pins the Python packages required by the business tools.
+- The root `pyproject.toml` declares the Python packages required by the business tools, and `uv.lock` pins their resolved versions.
 
 The orchestrator maintains one minimal category-analysis task per taxonomy node. The route agent progressively resolves product names through the taxonomy, `criteria_agent` researches the resolved route to produce a base evaluation contract, and `market_agent` aligns that contract with the configured number of deterministic Taobao OCR contexts (default five). Task preferences are not passed to either specialist.
 
