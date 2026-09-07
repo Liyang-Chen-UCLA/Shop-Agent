@@ -16,8 +16,8 @@ const FALLBACK_DELEGATE_PROMPT = "Complete the one bounded task provided by the 
 
 export const DEFAULT_CONFIG: ShopAgentConfig = {
   provider: "opencode-go",
-  defaultModel: "muse-spark-1.2-contributor",
-  defaultThinking: "medium",
+  defaultModel: "hy3",
+  defaultThinking: "off",
   orchestrator: "orchestrator",
   agents: [
     {

@@ -36,9 +36,9 @@ test("loads project config and OpenCode Go model catalog", async () => {
   assert.match(config.agents[0].systemPrompt, /orchestrator/i);
 
   const runtime = createModelRuntime();
-  const model = runtime.getModel("muse-spark-1.2-contributor");
+  const model = runtime.getModel("hy3");
   assert.equal(model.provider, "opencode-go");
-  runtime.ensureThinking(model, "medium");
+  runtime.ensureThinking(model, "high");
 });
 
 test("resolves thinking for a target model without lowering while a higher level is available", () => {
@@ -386,7 +386,7 @@ test("persists and resumes project sessions as JSONL", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-test-"));
   try {
     const store = new SessionStore(directory);
-    const session = await store.create("muse-spark-1.2-contributor", "medium");
+    const session = await store.create("hy3", "high");
     const messages = [
       { role: "user" as const, content: [{ type: "text" as const, text: "Find a laptop" }], timestamp: Date.now() },
     ];

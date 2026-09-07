@@ -36,7 +36,7 @@ uv sync --locked
 - [`docs/architecture.md`](./docs/architecture.md)：架构边界与运行流程。
 - [`docs/backlog/`](./docs/backlog/)：明确暂缓的后续能力。
 
-默认使用 OpenCode Go 的 `muse-spark-1.2-contributor`。在 TUI 中输入 `/help` 查看命令，使用 `/model` 切换模型。
+默认使用 OpenCode Go 的 `hy3`，思考级别为 `off`。在 TUI 中输入 `/help` 查看命令，使用 `/model` 切换模型。
 
 市场分析阶段使用 `shop-agent.config.ts` 中的固定 parquet 数据集和
 `maxDistinctProducts`（默认值为 `5`）。结果缓存于 `.shop-agent/market-criteria/<node_id>/`：

@@ -51,7 +51,7 @@ Each run starts `src/framework/subagents/child-runner.ts` in an independent Node
 Native tools are resolved through the same explicit profile allowlists as Python
 tools. `web_search` is available to `criteria_agent` and `market_agent`; it
 runs one isolated OpenCode/pi model request per query with the fixed
-`muse-spark-1.2-contributor` model at low thinking and returns research text
+`hy3` model with thinking disabled and returns research text
 only. Criteria keeps its required four-query plus one-follow-up cap; market has
 no numeric cap and is instructed to search only for conflicts or OCR-new
 definitions. `report_developer_issue` is explicitly allowlisted for the
