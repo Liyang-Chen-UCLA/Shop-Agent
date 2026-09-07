@@ -8,6 +8,7 @@ export type {
   OutputValidatorConfig,
   PromptSource,
   PythonToolDefinition,
+  ShopAgentPaths,
   ShopAgentConfig,
   ShopAgentConfigInput,
 } from "./types.ts";

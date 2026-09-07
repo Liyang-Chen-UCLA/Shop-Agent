@@ -40,6 +40,11 @@ export type PythonConfig = {
   envAllowlist: string[];
 };
 
+export type ShopAgentPaths = {
+  dataset: string;
+  runtimeData: string;
+};
+
 export type ShopAgentConfig = {
   provider: "opencode-go";
   defaultModel: string;
@@ -48,12 +53,12 @@ export type ShopAgentConfig = {
   agents: AgentProfile[];
   toolDirectories: string[];
   python: PythonConfig;
-  dataDirectory: string;
-  datasetPath: string;
+  paths: ShopAgentPaths;
   maxDistinctProducts: number;
 };
 
-export type ShopAgentConfigInput = Partial<Omit<ShopAgentConfig, "python">> & {
+export type ShopAgentConfigInput = Partial<Omit<ShopAgentConfig, "python" | "paths">> & {
+  paths?: Partial<ShopAgentPaths>;
   python?: Partial<PythonConfig>;
 };
 
@@ -66,6 +71,10 @@ export type ResolvedConfig = Omit<ShopAgentConfig, "agents"> & {
   agents: ResolvedAgentProfile[];
   cwd: string;
   configPath?: string;
+  /** Trusted absolute runtime data directory derived from paths.runtimeData. */
+  dataDirectory: string;
+  /** Trusted absolute dataset path derived from paths.dataset. */
+  datasetPath: string;
 };
 
 export type PythonToolDefinition = {

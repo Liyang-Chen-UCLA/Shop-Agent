@@ -29,7 +29,7 @@ if ($Check) {
         Join-Path $projectRoot ".venv/bin/python"
     }
     if (-not (Test-Path -LiteralPath $pythonExecutable -PathType Leaf)) {
-        Write-Error "Python environment not found. Run 'uv sync' from the project root."
+        Write-Error "Python environment not found. Run 'uv sync --locked' from the project root."
         exit 1
     }
 

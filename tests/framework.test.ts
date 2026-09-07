@@ -501,7 +501,7 @@ test("creates an interactive orchestrator with state tools and focused subagents
     app = await createShopAgent({
       cwd,
       skipAuthCheck: true,
-      config: { dataDirectory: directory },
+      config: { paths: { runtimeData: directory } },
     });
     assert.deepEqual(app.agent.state.tools.map((tool) => tool.name), [
       "task_state_get",

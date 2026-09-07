@@ -10,7 +10,12 @@ const cwd = path.resolve(import.meta.dirname, "..");
 
 test("wires the narrow market profile, repo skill, dataset config, and tools", async () => {
   const config = await loadConfig(cwd);
-  assert.equal(config.datasetPath, "F:\\Code\\taobao-product-context\\data\\products.parquet");
+  assert.deepEqual(config.paths, {
+    dataset: "data/taobao-product-context/data/products.parquet",
+    runtimeData: ".shop-agent",
+  });
+  assert.equal(config.datasetPath, path.resolve(cwd, "data/taobao-product-context/data/products.parquet"));
+  assert.equal(config.dataDirectory, path.resolve(cwd, ".shop-agent"));
   assert.equal(config.maxDistinctProducts, 5);
   const market = config.agents.find((agent) => agent.id === "market_agent");
   assert.ok(market);

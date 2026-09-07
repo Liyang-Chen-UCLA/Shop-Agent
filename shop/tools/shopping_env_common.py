@@ -27,7 +27,6 @@ from market_mapping import MARKET_MAPPING_VERSION, NODE_TO_DATASET_CATEGORY, dat
 from task_state_common import load_state
 
 
-DEFAULT_DATASET_PATH = Path(r"F:\Code\taobao-product-context\data\products.parquet")
 DEFAULT_MAX_DISTINCT_PRODUCTS = 5
 
 
@@ -49,8 +48,7 @@ def _data_directory(context: dict[str, Any]) -> Path:
 
 
 def _dataset_path(context: dict[str, Any]) -> Path:
-    raw = context.get("datasetPath")
-    return Path(raw).expanduser().resolve() if isinstance(raw, str) and raw.strip() else DEFAULT_DATASET_PATH
+    return Path(_required_text(context.get("datasetPath"), "trusted dataset path")).expanduser().resolve()
 
 
 def max_distinct_products(context: dict[str, Any]) -> int:

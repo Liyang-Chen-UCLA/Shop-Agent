@@ -1,8 +1,19 @@
 #!/usr/bin/env node
+import { stat } from "node:fs/promises";
 import { createShopAgent } from "./framework/index.ts";
 import { formatBackendEnvTestTurn, runBackendEnvTest } from "./backend-env-test.ts";
 import { formatMultiTurnTestTurn, runMultiTurnTest } from "./multi-turn-test.ts";
 import { ShopAgentTui } from "./tui/tui.ts";
+
+async function checkDatasetFile(datasetPath: string): Promise<void> {
+  try {
+    const details = await stat(datasetPath);
+    if (!details.isFile()) throw new Error("path is not a file");
+  } catch (error) {
+    const reason = error instanceof Error ? ` (${error.message})` : "";
+    throw new Error(`Configured product dataset is unavailable: ${datasetPath}${reason}`);
+  }
+}
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -15,11 +26,13 @@ async function main(): Promise<void> {
     app = await createShopAgent({ cwd: process.cwd(), configPath: argument("--config") });
 
     if (process.argv.includes("--check")) {
+      await checkDatasetFile(app.config.datasetPath);
       process.stdout.write(`Shop Agent configuration is valid.\n`);
       process.stdout.write(`Provider: opencode-go\n`);
       process.stdout.write(`Model: ${app.currentSession.model}\n`);
       process.stdout.write(`Agents: ${app.listAgents().map((agent) => agent.id).join(", ")}\n`);
       process.stdout.write(`Python: .venv persistent worker\n`);
+      process.stdout.write(`Dataset: ${app.config.datasetPath}\n`);
       return;
     }
 

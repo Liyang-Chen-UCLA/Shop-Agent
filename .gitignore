@@ -3,6 +3,7 @@ node_modules/
 __pycache__/
 *.py[cod]
 .shop-agent/
+data/
 .env
 .env.*
 .venv/

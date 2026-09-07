@@ -18,7 +18,24 @@ Windows 上可直接交互的多 Agent TUI。主 Agent 负责理解和编排任�
 uv sync --locked
 ```
 
-运行时只使用 repo-local `.venv` 中的持久 Python Worker；`uv` 仅负责 setup 和依赖管理。检查配置、`.venv` 和 Python 依赖但不打开 TUI：
+### 新设备首次准备
+
+淘宝商品数据集由 Hugging Face 下载到仓库内的默认位置。首次在新设备上使用时，在项目根目录执行：
+
+```powershell
+uv sync --locked
+
+uvx --from huggingface-hub hf download Helios1208/taobao-product-context `
+  --repo-type dataset `
+  --local-dir data/taobao-product-context
+
+.\start.ps1 -Check
+.\start.ps1
+```
+
+数据集配置统一位于 [`shop-agent.config.ts`](./shop-agent.config.ts) 的 `paths` 字段，运行时会自动解析为当前仓库的绝对路径，无需修改机器相关路径。
+
+运行时只使用 repo-local `.venv` 中的持久 Python Worker；`uv` 仅负责 setup 和依赖管理。检查配置、`.venv`、Python 依赖、数据集和认证但不打开 TUI：
 
 ```powershell
 .\start.ps1 -Check

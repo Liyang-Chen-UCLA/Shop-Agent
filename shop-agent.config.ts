@@ -5,6 +5,9 @@ export default defineConfig({
   orchestrator: "orchestrator",
   agents,
   toolDirectories: ["shop/tools"],
-  datasetPath: "F:\\Code\\taobao-product-context\\data\\products.parquet",
+  paths: {
+    dataset: "data/taobao-product-context/data/products.parquet",
+    runtimeData: ".shop-agent",
+  },
   maxDistinctProducts: 5,
 });

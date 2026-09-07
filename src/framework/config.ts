@@ -41,8 +41,10 @@ export const DEFAULT_CONFIG: ShopAgentConfig = {
     timeoutMs: 60_000,
     envAllowlist: [],
   },
-  dataDirectory: ".shop-agent",
-  datasetPath: "F:\\Code\\taobao-product-context\\data\\products.parquet",
+  paths: {
+    dataset: "data/taobao-product-context/data/products.parquet",
+    runtimeData: ".shop-agent",
+  },
   maxDistinctProducts: 5,
 };
 
@@ -64,6 +66,10 @@ function mergeConfig(input: ShopAgentConfigInput): ShopAgentConfig {
   return {
     ...DEFAULT_CONFIG,
     ...input,
+    paths: {
+      ...DEFAULT_CONFIG.paths,
+      ...input.paths,
+    },
     agents: input.agents ?? DEFAULT_CONFIG.agents,
     toolDirectories: input.toolDirectories ?? DEFAULT_CONFIG.toolDirectories,
     python: {
@@ -87,8 +93,14 @@ async function resolveProfile(cwd: string, profile: AgentProfile): Promise<Resol
 }
 
 function validateConfig(config: ShopAgentConfig): void {
-  if (!config.datasetPath || typeof config.datasetPath !== "string") {
-    throw new Error("datasetPath must be a non-empty string.");
+  if (!config.paths || typeof config.paths !== "object") {
+    throw new Error("paths must be an object.");
+  }
+  if (typeof config.paths.dataset !== "string" || !config.paths.dataset.trim()) {
+    throw new Error("paths.dataset must be a non-empty string.");
+  }
+  if (typeof config.paths.runtimeData !== "string" || !config.paths.runtimeData.trim()) {
+    throw new Error("paths.runtimeData must be a non-empty string.");
   }
   if (!Number.isInteger(config.maxDistinctProducts) || config.maxDistinctProducts <= 0) {
     throw new Error("maxDistinctProducts must be a positive integer.");
@@ -134,10 +146,22 @@ export async function loadConfig(cwd: string, explicitPath?: string, override?: 
   }
 
   const mergedInput: ShopAgentConfigInput = override
-    ? { ...input, ...override, python: { ...input.python, ...override.python } }
+    ? {
+      ...input,
+      ...override,
+      paths: { ...input.paths, ...override.paths },
+      python: { ...input.python, ...override.python },
+    }
     : input;
   const config = mergeConfig(mergedInput);
   validateConfig(config);
+  const resolvedConfig = {
+    ...config,
+    dataDirectory: path.resolve(cwd, config.paths.runtimeData),
+    datasetPath: path.resolve(cwd, config.paths.dataset),
+    cwd,
+    configPath: loadedPath,
+  };
   const agents = await Promise.all(config.agents.map((profile) => resolveProfile(cwd, profile)));
-  return { ...config, agents, cwd, configPath: loadedPath };
+  return { ...resolvedConfig, agents };
 }

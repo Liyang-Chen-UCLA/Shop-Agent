@@ -16,7 +16,7 @@ const task = JSON.stringify(route);
 
 async function setupManager() {
   const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-market-"));
-  const config = await loadConfig(cwd, undefined, { dataDirectory: directory });
+  const config = await loadConfig(cwd, undefined, { paths: { runtimeData: directory } });
   const manager = new SubagentManager(config, new Map());
   const criteria = config.agents.find((profile) => profile.id === "criteria_agent")!;
   return { directory, config, manager, criteria, market: config.agents.find((profile) => profile.id === "market_agent")! };
