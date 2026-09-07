@@ -251,7 +251,7 @@ export async function probeBackendEnv(
       sessionId: randomUUID(),
       runId: randomUUID(),
       dataDirectory: temporaryDirectory,
-      datasetPath: path.resolve(config.cwd, config.datasetPath),
+      datasetPath: config.datasetPath,
       maxDistinctProducts: config.maxDistinctProducts,
       agentName: "backend_env_test",
     };
@@ -327,7 +327,7 @@ export async function verifyBackendEnvMarketArtifact(
   task: TaskState["tasks"][number],
   samples: readonly BackendEnvSampleSummary[],
 ): Promise<BackendEnvArtifactSummary> {
-  const artifactDirectory = path.resolve(config.cwd, config.dataDirectory, "market-criteria", task.route.node_id);
+  const artifactDirectory = path.join(config.dataDirectory, "market-criteria", task.route.node_id);
   const marketPath = path.join(artifactDirectory, "market.json");
   let market: Record<string, unknown>;
   try {

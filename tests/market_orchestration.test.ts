@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/framework/config.ts";
 import { SubagentManager } from "../src/framework/subagents/manager.ts";
+import { createDelegationTool } from "../src/framework/subagents/tool.ts";
 
 const cwd = path.resolve(import.meta.dirname, "..");
 const route = {
@@ -83,6 +84,39 @@ test("runs criteria, persists base, then runs market when neither artifact exist
     assert.equal(result.value && (result.value as any).stage, market.id);
     assert.deepEqual(calls, [criteria.id, "persist_base", market.id]);
     assert.deepEqual(childTasks, [task, task]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("delegate_agent uses resolved absolute paths for a subagent run", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-run-path-"));
+  try {
+    const config = await loadConfig(cwd, undefined, { paths: { runtimeData: directory } });
+    const manager = new SubagentManager(config, new Map());
+    const profile = config.agents.find((item) => item.id === "delegate")!;
+    let capturedRequest: { runId: string; dataDirectory: string; datasetPath: string } | undefined;
+    let capturedRunDirectory: string | undefined;
+    (manager as any).runAttempt = async (request: any, runDirectory: string) => {
+      capturedRequest = request;
+      capturedRunDirectory = runDirectory;
+      return { text: "delegate result", runId: request.runId };
+    };
+
+    const delegation = createDelegationTool(config.agents, manager, () => ({}), () => "regression-session");
+    const result = await delegation.execute("delegate-regression", {
+      action: "run",
+      agent: profile.id,
+      task: "Return a short test result.",
+    });
+    const runId = (result.details as { runId: string }).runId;
+    const expectedRunDirectory = path.join(directory, "runs", runId);
+
+    assert.equal(capturedRunDirectory, expectedRunDirectory);
+    assert.equal(capturedRequest!.dataDirectory, config.dataDirectory);
+    assert.equal(capturedRequest!.datasetPath, config.datasetPath);
+    const status = JSON.parse(await readFile(path.join(expectedRunDirectory, "status.json"), "utf8")) as { id: string };
+    assert.equal(status.id, runId);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

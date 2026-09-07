@@ -87,7 +87,7 @@ export class ShopAgent {
       if (!options.skipAuthCheck) await checkOpenCodeAuth(runtime);
       const defaultModel = runtime.getModel(config.defaultModel);
       runtime.ensureThinking(defaultModel, config.defaultThinking);
-      const dataDirectory = path.resolve(cwd, config.dataDirectory);
+      const dataDirectory = config.dataDirectory;
       const sessions = new SessionStore(dataDirectory);
       const logger = new Logger(dataDirectory);
       const session = await sessions.create(config.defaultModel, config.defaultThinking);
@@ -120,8 +120,8 @@ export class ShopAgent {
       this.python,
       () => ({
         sessionId: this.session.metadata.id,
-        dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
-        datasetPath: path.resolve(this.config.cwd, this.config.datasetPath),
+        dataDirectory: this.config.dataDirectory,
+        datasetPath: this.config.datasetPath,
         maxDistinctProducts: this.config.maxDistinctProducts,
         agentName: profile.id,
       }),

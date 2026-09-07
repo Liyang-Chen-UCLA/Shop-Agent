@@ -85,7 +85,7 @@ export class SubagentManager {
       events: [],
     };
     this.runs.set(runId, detail);
-    const runDirectory = path.join(this.config.cwd, this.config.dataDirectory, "runs", runId);
+    const runDirectory = path.join(this.config.dataDirectory, "runs", runId);
     await mkdir(runDirectory, { recursive: true });
     await this.saveSummary(runDirectory, detail);
 
@@ -100,8 +100,8 @@ export class SubagentManager {
       runId,
       sessionId: options.sessionId ?? runId,
       projectRoot: this.config.cwd,
-      dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
-      datasetPath: path.resolve(this.config.cwd, this.config.datasetPath),
+      dataDirectory: this.config.dataDirectory,
+      datasetPath: this.config.datasetPath,
       maxDistinctProducts: this.config.maxDistinctProducts,
       task: options.task,
       profile: options.profile,
@@ -162,7 +162,7 @@ export class SubagentManager {
   }
 
   private artifactDirectory(): string {
-    return path.resolve(this.config.cwd, this.config.dataDirectory, "market-criteria");
+    return path.join(this.config.dataDirectory, "market-criteria");
   }
 
   private async cachedMarket(task: string): Promise<RunResult | undefined> {
@@ -210,8 +210,8 @@ export class SubagentManager {
         operation: "persist_base",
         sessionId,
         runId,
-        dataDirectory: path.resolve(this.config.cwd, this.config.dataDirectory),
-        datasetPath: path.resolve(this.config.cwd, this.config.datasetPath),
+        dataDirectory: this.config.dataDirectory,
+        datasetPath: this.config.datasetPath,
         maxDistinctProducts: this.config.maxDistinctProducts,
         agentName: "criteria_agent",
       },

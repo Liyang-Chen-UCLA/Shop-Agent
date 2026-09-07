@@ -87,7 +87,7 @@ async function writeMarketArtifact(
   route: (typeof BACKEND_ENV_TEST_SCENARIOS)[number]["route"],
   selected: readonly BackendEnvSampleSummary[],
 ): Promise<void> {
-  const directory = path.resolve(config.cwd, config.dataDirectory, "market-criteria", route.node_id);
+  const directory = path.join(config.dataDirectory, "market-criteria", route.node_id);
   const productsDirectory = path.join(directory, "products");
   await mkdir(productsDirectory, { recursive: true });
   const productIds = selected.map((sample) => sample.item_id);
@@ -171,7 +171,7 @@ test("runs three categories through one fake app and verifies market artifacts",
     assert.equal(record.task_state.active_task_id, "light-task");
     assert.deepEqual(Object.keys(record.env_samples[0] as object), ["category", "item_id", "rank", "sample_index"]);
     assert.doesNotMatch(output[2]!, /ocr_text|OCR/);
-    await readFile(path.join(path.resolve(value.config.cwd, value.config.dataDirectory, "market-criteria", value.mobileRoute.node_id), "market.json"), "utf8");
+    await readFile(path.join(value.config.dataDirectory, "market-criteria", value.mobileRoute.node_id, "market.json"), "utf8");
   } finally {
     await rm(value.directory, { recursive: true, force: true });
   }
@@ -180,7 +180,7 @@ test("runs three categories through one fake app and verifies market artifacts",
 test("fails when a required market artifact is missing", async () => {
   const value = await fixture();
   try {
-    await rm(path.resolve(value.config.cwd, value.config.dataDirectory, "market-criteria", value.mobileRoute.node_id, "market.json"), { force: true });
+    await rm(path.join(value.config.dataDirectory, "market-criteria", value.mobileRoute.node_id, "market.json"), { force: true });
     await assert.rejects(
       () => runBackendEnvTest(value.app, { probe: value.probe }),
       /Market artifact is missing or invalid.*phone-fill-light/,
@@ -192,7 +192,7 @@ test("fails when a required market artifact is missing", async () => {
 
 test("probes the real dog-food backend env without creating a model run", async (context) => {
   const config = await loadConfig(projectRoot);
-  if (!existsSync(path.resolve(config.cwd, config.datasetPath))) {
+  if (!existsSync(config.datasetPath)) {
     context.skip(`configured product dataset is unavailable: ${config.datasetPath}`);
     return;
   }
