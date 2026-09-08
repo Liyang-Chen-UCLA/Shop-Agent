@@ -114,10 +114,6 @@ function validateConfig(config: ShopAgentConfig): void {
       if (!listTrustedOutputValidators().includes(profile.outputValidator.id)) {
         throw new Error(`Agent '${profile.id}' references unknown trusted output validator '${profile.outputValidator.id}'.`);
       }
-      const repairs = profile.outputValidator.maxOutputRepairs ?? 0;
-      if (!Number.isInteger(repairs) || repairs < 0 || repairs > 3) {
-        throw new Error(`Agent '${profile.id}' output validator maxOutputRepairs must be an integer from 0 to 3.`);
-      }
       if (!profile.outputSchema) throw new Error(`Agent '${profile.id}' configures an output validator without outputSchema.`);
     }
   }

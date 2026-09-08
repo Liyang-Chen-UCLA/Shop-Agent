@@ -33,9 +33,10 @@ If a new item is discovered late, append `not_mentioned` entries for it to
 earlier products. Frequencies count products with observed or unparsed status,
 not the number of values.
 
-The final JSON has exactly seven top-level keys: `node`, `dataset_category`,
-`traversed_product_count`, `product_ids`, `criteria`, `attributes`, and the
-raw `products` array. Never replace `products` with a summary. Each product
+The object submitted through `submit_result` has exactly seven top-level keys:
+`node`, `dataset_category`, `traversed_product_count`, `product_ids`,
+`criteria`, `attributes`, and the raw `products` array. Never replace
+`products` with a summary. Each product
 object has exactly four required keys—`dataset_category`, `item_id`,
 `criteria`, and `attributes`—and both extraction arrays must be present, even
 when empty. Together they must cover every final criterion and attribute.

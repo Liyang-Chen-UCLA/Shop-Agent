@@ -8,7 +8,7 @@ const FRAMEWORK_INVARIANTS = `Framework rules:
 
 export function composeSystemPrompt(profile: ResolvedAgentProfile): string {
   const outputRule = profile.outputSchema
-    ? "\n\nReturn only valid JSON matching the configured output schema. Do not wrap it in Markdown fences."
+    ? "\n\nWhen the task is complete, submit the final structured result using the `submit_result` tool. Do not provide the structured result as ordinary assistant text."
     : "";
   const skill = profile.skillPrompt?.trim()
     ? `\n\nLoaded repo skill:\n${profile.skillPrompt.trim()}`

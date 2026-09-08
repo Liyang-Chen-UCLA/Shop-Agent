@@ -31,8 +31,6 @@ export type AgentProfile = {
 export type OutputValidatorConfig = {
   /** Stable framework registry id for a trusted validator implementation. */
   id: string;
-  /** Number of same-context JSON repair steers allowed after the initial output. */
-  maxOutputRepairs?: number;
 };
 
 export type PythonConfig = {

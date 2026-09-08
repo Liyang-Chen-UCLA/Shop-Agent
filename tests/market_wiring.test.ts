@@ -26,13 +26,15 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(criteria?.systemPrompt ?? "", /"type":"target_range","unit":"小时"/);
   assert.match(criteria?.systemPrompt ?? "", /"type":"partial_order","better_than"/);
   assert.match(criteria?.systemPrompt ?? "", /attributes use the same common\/type-specific fields but must omit `direction` entirely/i);
+  assert.deepEqual(criteria?.outputValidator, { id: "criteria_v1" });
+  assert.match(composeSystemPrompt(criteria!), /submit the final structured result using the `submit_result` tool/);
   const routeAgent = config.agents.find((agent) => agent.id === "route_agent");
   assert.equal(routeAgent?.model, undefined);
   assert.equal(routeAgent?.thinking, undefined);
-  assert.match(routeAgent?.systemPrompt ?? "", /Return exactly this JSON wrapper/);
+  assert.match(routeAgent?.systemPrompt ?? "", /submitted\s+result must use exactly this wrapper/);
   assert.match(routeAgent?.systemPrompt ?? "", /"results": \[\s+\{\s+"product": "\.\.\."/);
   assert.match(routeAgent?.systemPrompt ?? "", /even when there is only one product/i);
-  assert.match(routeAgent?.systemPrompt ?? "", /On repair,\s+return the complete wrapper/);
+  assert.match(routeAgent?.systemPrompt ?? "", /When complete, call `submit_result` with the final result/);
   assert.match(routeAgent?.systemPrompt ?? "", /resolved_nodes.*candidates.*children/s);
   assert.match(routeAgent?.systemPrompt ?? "", /exactly `node_id`, `node_name`, and `node_path`/);
   assert.match(routeAgent?.systemPrompt ?? "", /never copy `parent_id`, `level`/);
@@ -42,7 +44,7 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.equal(market?.webSearchPolicy, "market");
   assert.equal(market?.model, undefined);
   assert.equal(market?.thinking, undefined);
-  assert.equal(market?.outputValidator?.maxOutputRepairs, 2);
+  assert.deepEqual(market?.outputValidator, { id: "market_v1" });
   assert.deepEqual(market?.tools, ["load_base", "shopping_env", "web_search", "report_developer_issue"]);
   assert.match(market?.systemPrompt ?? "", /exactly these seven top-level keys/);
   assert.match(market?.systemPrompt ?? "", /Every product object has exactly four keys/);
@@ -53,6 +55,7 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(market?.systemPrompt ?? "", /tool accepts no arguments: every advancing call must be exactly\s+`shopping_env\(\{\}\)`/);
   assert.doesNotMatch(market?.systemPrompt ?? "", /reread/);
   assert.match(market?.systemPrompt ?? "", /each value should\s+explicitly include `raw_value`,\s+`normalized_value`,\s+`unit`,\s+`qualifier`,\s+`evidence`,\s+and\s+`ocr_page_id`/);
+  assert.match(composeSystemPrompt(market!), /submit the final structured result using the `submit_result` tool/);
   assert.match(market?.skillPrompt ?? "", /market-alignment/);
   assert.match(market?.skillPrompt ?? "", /Copy the exact\s+`dataset_category` returned by `shopping_env`/);
   assert.match(market?.skillPrompt ?? "", /do not finalize with only four products/i);

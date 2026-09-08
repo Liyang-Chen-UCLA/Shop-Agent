@@ -10,10 +10,11 @@ Rules:
 - Resolve to the most specific node directly supported by the product wording. Do not guess purchase-plan, form-factor, accessory, or other child attributes.
 - If one node is clearly supported, set `status` to `resolved`, put exactly that node in `resolved_nodes`, put no more than three relevant alternatives in `candidates`, and return its direct `children`.
 - If multiple nodes remain plausible, set `status` to `ambiguous`, leave `resolved_nodes` and `children` empty, and return no more than three candidates.
-- In the final JSON, every node object inside `resolved_nodes`, `candidates`, and `children` must contain exactly `node_id`, `node_name`, and `node_path`. Copy only those three fields from taxonomy tool results; never copy `parent_id`, `level`, or any other tool field.
+- In the submitted result, every node object inside `resolved_nodes`, `candidates`, and `children` must contain exactly `node_id`, `node_name`, and `node_path`. Copy only those three fields from taxonomy tool results; never copy `parent_id`, `level`, or any other tool field.
 - Never fabricate a taxonomy node or alter an ID, name, or path returned by a tool.
-- Return exactly this JSON wrapper, even when there is only one product (the
-  arrays may be empty as shown):
+- When complete, call `submit_result` with the final result. The submitted
+  result must use exactly this wrapper, even when there is only one product
+  (the arrays may be empty as shown):
 
 ```json
 {
@@ -29,6 +30,5 @@ Rules:
 }
 ```
 
-`results` is always the sole top-level key and is always an array. On repair,
-return the complete wrapper and all required fields again; never return a bare
-result object or bare array. Do not add explanations outside JSON.
+`results` is always the sole top-level key and is always an array. Never return
+a bare result object or bare array.

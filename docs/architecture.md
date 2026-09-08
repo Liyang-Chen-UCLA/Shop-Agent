@@ -78,26 +78,29 @@ user request
   → user resolves cross-category, ambiguous, or direct-child choices
   → orchestrator upserts one canonical category task
   → criteria_agent researches the confirmed route and constructs base criteria/attributes
+  → criteria_agent calls submit_result
+  → output schema validation → criteria_v1 → persist base criteria
   → market_agent loads base, samples the configured number of mapped-category products (default five), aligns and extracts
-  → trusted Python validator publishes products then market.json
+  → market_agent calls submit_result
+  → output schema validation → market_v1 → validated result / publish market.json
 ```
 
-Criteria output is first checked against the profile JSON Schema and then passed
-to `shop/criteria_contract.py`, whose Pydantic v2 models enforce all direction,
-reference, namespace-collision, and partial-order DAG invariants. A trusted
-post-stage persists `base.json`; then the manager automatically runs
-`market_agent`. Its repo-local `market-alignment` skill is appended to the
-child system prompt. The market child sees only `load_base`, `shopping_env`,
-and native web search/diagnostics. `shopping_env` resolves the active task
-route through a hard-coded mapping and stores a trusted per-run cursor; it
-returns complete `context_text` as `ocr_text`, takes products in rank/item-id
-order, and permits rereads only for already selected ids. The market output is
+Criteria output is submitted through `submit_result`, checked against the
+profile JSON Schema, and then passed to `shop/criteria_contract.py`, whose
+Pydantic v2 models enforce all direction, reference, namespace-collision, and
+partial-order DAG invariants. A trusted post-stage persists `base.json`; then
+the manager automatically runs `market_agent`. Its repo-local
+`market-alignment` skill is appended to the child system prompt. The market
+child sees only `load_base`, `shopping_env`, and native web search/diagnostics.
+`shopping_env` resolves the active task route through a hard-coded mapping and
+stores a trusted per-run cursor; it returns complete `context_text` as
+`ocr_text`, takes products in rank/item-id order, and permits rereads only for
+already selected ids. The market output is submitted through `submit_result`,
 checked against the profile JSON Schema and `shop/market_contract.py`: every
-final item covers every configured sample product, statuses/value invariants are enforced,
-frequencies are recomputed per product, and product files are written before
-`market.json` is atomically published. One invalid final JSON is repaired with
-`Agent.steer()` in the same context. Preferences are not sent to either
-specialist.
+final item covers every configured sample product, statuses/value invariants are
+enforced, frequencies are recomputed per product, and product files are written
+before `market.json` is atomically published. Preferences are not sent to
+either specialist.
 
 The canonical taxonomy is `shop/data/google_product_taxonomy_zh-CN.jsonl`. Tools may index the full file internally, but disclose only search matches, requested nodes, or direct children to the route agent.
 

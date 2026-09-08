@@ -41,15 +41,16 @@ only base-contract source is `load_base`.
    null; for `not_mentioned`, values must be empty. Every observed or
    unparsed value must include non-empty evidence copied verbatim from that
    product's `ocr_text`; include OCR page ids whenever available.
-5. Return only JSON matching the configured schema. Include all five selected
-   product ids in exact shopping-env order, set `traversed_product_count` to
-   the configured sample limit, and
+5. When complete, call `submit_result` with the final result matching the
+   configured schema. Include all five selected product ids in exact
+   shopping-env order, set `traversed_product_count` to the configured sample
+   limit, and
    metadata (`observed_product_count`, `market_alignment`, `web_evidence`) on
    every final criterion and attribute. The trusted validator recomputes
    frequencies, validates identities, and publishes the artifact files.
 
-The output shape is strict: return exactly these seven top-level keys, and do
-not replace the raw `products` array with a summary:
+The submitted object has exactly these seven top-level keys, and must not
+replace the raw `products` array with a summary:
 
 ```json
 {

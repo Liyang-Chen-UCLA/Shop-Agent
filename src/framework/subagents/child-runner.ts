@@ -3,8 +3,7 @@ import { createModelRuntime } from "../model-runtime.ts";
 import { createPythonAgentTools } from "../python-tools.ts";
 import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
 import { messageText, sanitizeDeveloperDiagnosticMessages } from "../content.ts";
-import { createOutputValidationController } from "../output-validation-hook.ts";
-import { validateJsonSchema } from "../schema.ts";
+import { createTerminalOutputTool } from "../terminal-output.ts";
 import { composeSystemPrompt } from "../system-prompt.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { createInterface } from "node:readline";
@@ -61,17 +60,19 @@ async function main(): Promise<void> {
     getRuntimeContext: () => ({ sessionId: request.sessionId, agentName: request.profile.id, projectRoot: request.projectRoot }),
     webSearchPolicy: request.profile.webSearchPolicy ?? (request.profile.id === "market_agent" ? "market" : "criteria"),
   });
-  const tools = traceTools([...pythonTools, ...nativeToolSet.tools], tracing);
-  const validationController = createOutputValidationController({
-    profile: request.profile,
+  const terminalOutputTool = createTerminalOutputTool(request.profile, {
     python,
     runtimeContext: () => ({
       ...runtimeContext(),
       operation: request.profile.id === "market_agent" ? "publish_market" : undefined,
       searchStats: nativeToolSet.searchStats,
     }),
-    steer: (message) => agent!.steer(message),
   });
+  const tools = traceTools([
+    ...pythonTools,
+    ...nativeToolSet.tools,
+    ...(terminalOutputTool ? [terminalOutputTool] : []),
+  ], tracing);
   agent = new Agent({
     initialState: {
       systemPrompt: composeSystemPrompt(request.profile),
@@ -83,7 +84,6 @@ async function main(): Promise<void> {
     streamFn: runtime.streamSimple,
     sessionId: request.runId,
     toolExecution: "sequential",
-    shouldStopAfterTurn: validationController.shouldStopAfterTurn,
   });
 
   agent.subscribe((event) => {
@@ -106,14 +106,14 @@ async function main(): Promise<void> {
   });
 
   await agent.prompt(request.task);
-  if (validationController.state.terminalError) throw new Error(validationController.state.terminalError);
   const finalMessage = [...agent.state.messages].reverse().find((message) => message.role === "assistant");
   if (finalMessage?.role === "assistant" && finalMessage.stopReason === "aborted") {
     const timedOut = abortReason === "timeout";
     observation?.fail?.(timedOut ? "Subagent attempt timed out." : "Subagent was aborted by the user.", !timedOut);
     throw new Error(timedOut ? `Subagent '${request.profile.id}' timed out.` : `Subagent '${request.profile.id}' was aborted.`);
   }
-  const text = finalMessage ? messageText(finalMessage) : "";
+  let text = "";
+  if (!request.profile.outputSchema) text = finalMessage ? messageText(finalMessage) : "";
   if (!text && agent.state.errorMessage) throw new Error(agent.state.errorMessage);
 
   if (request.profile.id === "criteria_agent") {
@@ -142,17 +142,10 @@ async function main(): Promise<void> {
 
   let value: unknown;
   if (request.profile.outputSchema) {
-    try {
-      value = JSON.parse(text);
-    } catch {
-      throw new Error(`Subagent '${request.profile.id}' must return JSON matching its output schema.`);
+    if (!terminalOutputTool?.state.submitted) {
+      throw new Error(`Subagent '${request.profile.id}' must successfully call ${terminalOutputTool?.name ?? "submit_result"}.`);
     }
-    if (!validationController.state.validationSucceeded) {
-      const validation = validateJsonSchema(request.profile.outputSchema, value);
-      if (!validation.valid) throw new Error(`Subagent output validation failed: ${validation.error}`);
-    } else {
-      value = validationController.state.validatedValue;
-    }
+    value = terminalOutputTool.state.validatedValue;
   }
   observation?.update({
     output: value ?? text,

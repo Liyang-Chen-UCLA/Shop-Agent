@@ -8,7 +8,7 @@ import { createModelRuntime, resolveThinking } from "../src/framework/model-runt
 import { createPythonAgentTools, discoverPythonTools } from "../src/framework/python-tools.ts";
 import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, MAX_CRITERIA_SEARCH_QUERIES, SEARCH_RESULT_MAX_CHARS, SEARCH_TRUNCATION_MARKER, truncateSearchResult } from "../src/framework/native-tools.ts";
 import { validateWithTrustedValidator } from "../src/framework/output-validator.ts";
-import { createOutputValidationController } from "../src/framework/output-validation-hook.ts";
+import { createTerminalOutputTool, SUBMIT_RESULT_TOOL } from "../src/framework/terminal-output.ts";
 import { isDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticMessages } from "../src/framework/content.ts";
 import { validateJsonSchema } from "../src/framework/schema.ts";
 import { SessionStore } from "../src/framework/session-store.ts";
@@ -177,83 +177,95 @@ test("enforces the four-base-query criteria search policy with one optional foll
   assert.equal(MAX_CRITERIA_SEARCH_QUERIES, 5);
 });
 
-test("output validation controller steers one repair and never succeeds after a second invalid candidate", async () => {
-  const profile = {
-    id: "criteria_agent",
-    role: "subagent",
-    description: "",
-    systemPrompt: "",
-    outputSchema: {
-      type: "object",
-      properties: { ok: { type: "boolean" } },
-      required: ["ok"],
-      additionalProperties: false,
-    },
-    outputValidator: { id: "fake", maxOutputRepairs: 1 },
-  } as never;
-  const turn = (text: string) => ({ message: { role: "assistant", content: [{ type: "text", text }] } } as never);
-  const steers: unknown[] = [];
-  const controller = createOutputValidationController({
-    profile,
-    python: testPython,
-    steer: (message) => steers.push(message),
-    validateTrusted: async (_validator, value) => value && (value as { ok?: unknown }).ok === true
-      ? { valid: true, value }
-      : { valid: false, error: "trusted rejection" },
-  });
-  assert.equal(await controller.shouldStopAfterTurn(turn('{"ok":"bad"}')), false);
-  assert.equal(steers.length, 1);
-  assert.equal(controller.state.repairCount, 1);
-  assert.equal(await controller.shouldStopAfterTurn(turn('{"ok":true}')), true);
-  assert.equal(controller.state.validationSucceeded, true);
-  assert.deepEqual(controller.state.validatedValue, { ok: true });
-
-  const failedSteers: unknown[] = [];
-  const failed = createOutputValidationController({
-    profile,
-    python: testPython,
-    steer: (message) => failedSteers.push(message),
-    validateTrusted: async () => ({ valid: false, error: "still invalid" }),
-  });
-  assert.equal(await failed.shouldStopAfterTurn(turn('{"ok":false}')), false);
-  assert.equal(await failed.shouldStopAfterTurn(turn('{"ok":false}')), true);
-  assert.equal(failedSteers.length, 1);
-  assert.equal(failed.state.validationSucceeded, false);
-  assert.match(failed.state.terminalError ?? "", /validation failed/);
+test("structured profiles receive only the unified submit_result terminal tool", async () => {
+  const config = await loadConfig(cwd);
+  const structured = config.agents.find((agent) => agent.id === "route_agent");
+  const ordinary = config.agents.find((agent) => agent.id === "delegate");
+  assert.ok(structured?.outputSchema);
+  const terminal = createTerminalOutputTool(structured!);
+  assert.equal(terminal?.name, SUBMIT_RESULT_TOOL);
+  assert.equal(terminal?.parameters, structured?.outputSchema);
+  assert.equal(createTerminalOutputTool(ordinary!), undefined);
 });
 
-test("invalid JSON diagnostics expose only stop reason and character count", async () => {
-  const profile = {
-    id: "market_agent",
-    role: "subagent",
-    description: "",
-    systemPrompt: "",
-    outputSchema: { type: "object", properties: {}, additionalProperties: false },
-    outputValidator: { id: "fake", maxOutputRepairs: 1 },
-  } as never;
-  const candidateSecret = "OCR-CANDIDATE-SECRET-avoid-leaking";
-  const turn = (text: string, stopReason: string) => ({
-    message: { role: "assistant", content: [{ type: "text", text }], stopReason },
-  } as never);
-  const steers: any[] = [];
-  const controller = createOutputValidationController({
-    profile,
-    python: testPython,
-    steer: (message) => steers.push(message),
-    validateTrusted: async () => ({ valid: true }),
-  });
+test("submit_result accepts schema-valid arguments and stores the result", async () => {
+  const config = await loadConfig(cwd);
+  const profile = config.agents.find((agent) => agent.id === "route_agent")!;
+  const terminal = createTerminalOutputTool(profile)!;
+  const value = { results: [] };
+  const result = await terminal.execute("submit-route", value);
+  assert.equal(result.terminate, true);
+  assert.equal(terminal.state.submitted, true);
+  assert.deepEqual(terminal.state.validatedValue, value);
+});
 
-  assert.equal(await controller.shouldStopAfterTurn(turn(candidateSecret, "length")), false);
-  const steerText = steers[0].content[0].text as string;
-  assert.match(steerText, /stop_reason=length/);
-  assert.match(steerText, /chars=\d+/);
-  assert.equal(steerText.includes(candidateSecret), false);
+test("submit_result returns a tool error for schema-invalid arguments", async () => {
+  const config = await loadConfig(cwd);
+  const profile = config.agents.find((agent) => agent.id === "route_agent")!;
+  const terminal = createTerminalOutputTool(profile)!;
+  await assert.rejects(
+    () => terminal.execute("submit-invalid", { wrong: true }),
+    /output schema/,
+  );
+  assert.equal(terminal.state.submitted, false);
+});
 
-  assert.equal(await controller.shouldStopAfterTurn(turn(candidateSecret, "stop")), true);
-  const terminalError = controller.state.terminalError ?? "";
-  assert.match(terminalError, /stop_reason=stop/);
-  assert.match(terminalError, /chars=\d+/);
-  assert.equal(terminalError.includes(candidateSecret), false);
+test("submit_result propagates criteria_v1 rejection as a tool error", async () => {
+  const config = await loadConfig(cwd);
+  const profile = config.agents.find((agent) => agent.id === "criteria_agent")!;
+  const terminal = createTerminalOutputTool(profile, { python: testPython })!;
+  const invalid = {
+    node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
+    criteria: [{
+      id: "battery_life",
+      name: "续航",
+      description: "d",
+      aliases: [],
+      type: "numeric",
+      units: [],
+      direction: { type: "target_range", unit: "小时" },
+    }],
+    attributes: [],
+  };
+  await assert.rejects(
+    () => terminal.execute("submit-criteria-invalid", invalid),
+    /criteria_v1.*rejected|target_range\.unit/,
+  );
+  assert.equal(terminal.state.submitted, false);
+});
+
+test("submit_result propagates market_v1 rejection as a tool error", async () => {
+  const config = await loadConfig(cwd);
+  const profile = config.agents.find((agent) => agent.id === "market_agent")!;
+  const terminal = createTerminalOutputTool(profile, { python: testPython })!;
+  const invalid = {
+    node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
+    dataset_category: "手机",
+    traversed_product_count: 5,
+    product_ids: [],
+    criteria: [],
+    attributes: [],
+    products: [],
+  };
+  await assert.rejects(
+    () => terminal.execute("submit-market-invalid", invalid),
+    /market_v1.*rejected|active route|trusted data directory/,
+  );
+  assert.equal(terminal.state.submitted, false);
+});
+
+test("submit_result stores the trusted validator value", async () => {
+  const config = await loadConfig(cwd);
+  const profile = config.agents.find((agent) => agent.id === "criteria_agent")!;
+  const terminal = createTerminalOutputTool(profile, { python: testPython })!;
+  const value = {
+    node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
+    criteria: [],
+    attributes: [],
+  };
+  await terminal.execute("submit-criteria-valid", value);
+  assert.equal(terminal.state.submitted, true);
+  assert.deepEqual(terminal.state.validatedValue, value);
 });
 
 test("diagnostic events and persisted messages are redacted without breaking tool pairing", () => {
