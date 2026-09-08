@@ -10,8 +10,10 @@ if (-not $nodeCommand) {
     exit 1
 }
 
+$projectRoot = $PSScriptRoot
+$envFilePath = Join-Path $projectRoot ".env"
+
 if ($Check) {
-    $projectRoot = $PSScriptRoot
     $uvCommand = Get-Command uv -ErrorAction SilentlyContinue
     if (-not $uvCommand) {
         Write-Warning "uv was not found on PATH. The existing .venv can run, but uv is needed for future dependency setup."
@@ -48,12 +50,7 @@ if ($Check) {
     }
 }
 
-if (-not $env:OPENCODE_API_KEY) {
-    Write-Error "OPENCODE_API_KEY is not visible in this terminal. Open a new terminal after creating the system environment variable."
-    exit 1
-}
-
-$arguments = @("src/cli.ts")
+$arguments = @("--env-file-if-exists=$envFilePath", "src/cli.ts")
 if ($Check) { $arguments += "--check" }
 if ($DebugMode) { $arguments += "--debug" }
 if ($Config) { $arguments += @("--config", $Config) }

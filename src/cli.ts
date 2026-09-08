@@ -28,6 +28,8 @@ async function main(): Promise<void> {
     if (process.argv.includes("--check")) {
       await checkDatasetFile(app.config.datasetPath);
       process.stdout.write(`Shop Agent configuration is valid.\n`);
+      process.stdout.write(`OpenCode auth: OK\n`);
+      process.stdout.write(`Langfuse tracing: ${app.tracing.enabled ? "enabled" : "disabled / credentials incomplete"}\n`);
       process.stdout.write(`Provider: opencode-go\n`);
       process.stdout.write(`Model: ${app.currentSession.model}\n`);
       process.stdout.write(`Agents: ${app.listAgents().map((agent) => agent.id).join(", ")}\n`);

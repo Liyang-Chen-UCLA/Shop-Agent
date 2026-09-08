@@ -2,16 +2,18 @@
 
 ## Start
 
-Open a new PowerShell terminal after setting the system `OPENCODE_API_KEY`, then run:
+Create the repo-local `.env` from the template, fill in `OPENCODE_API_KEY` and any
+optional Langfuse credentials, then run:
 
 ```powershell
+Copy-Item .env.example .env
 .\start.ps1
 ```
 
 The direct equivalent is:
 
 ```powershell
-node src/cli.ts
+node --env-file-if-exists=.env src/cli.ts
 ```
 
 Run the fixed three-turn phone workflow (create a task, update a preference,
@@ -19,7 +21,7 @@ then refine the route to unlocked phones) with the same app instance for every
 turn:
 
 ```powershell
-node src/cli.ts --multi-turn-test
+node --env-file-if-exists=.env src/cli.ts --multi-turn-test
 ```
 
 This mode requires `OPENCODE_API_KEY`, a provisioned repo-local `.venv`, and
@@ -35,7 +37,7 @@ category prompts through one real app instance and verifies the published
 market artifacts:
 
 ```powershell
-node src/cli.ts --backend-env-test
+node --env-file-if-exists=.env src/cli.ts --backend-env-test
 ```
 
 The backend-env mode also requires `OPENCODE_API_KEY`, a provisioned repo-local `.venv`,

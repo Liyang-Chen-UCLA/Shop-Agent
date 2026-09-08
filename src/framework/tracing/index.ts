@@ -48,7 +48,7 @@ function enabledFromEnvironment(): boolean {
   return Boolean(process.env.LANGFUSE_PUBLIC_KEY?.trim() && process.env.LANGFUSE_SECRET_KEY?.trim());
 }
 
-/** Construct tracing only from system environment; initialization is fail-open. */
+/** Construct tracing only from the process environment; initialization is fail-open. */
 export function createTracing(options: { exportMode?: "immediate" | "batched" } = {}): Tracing {
   if (!enabledFromEnvironment()) return new NoopTracing();
   try {

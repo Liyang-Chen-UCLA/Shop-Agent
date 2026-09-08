@@ -4,26 +4,12 @@ Windows 上可直接交互的多 Agent TUI。主 Agent 负责理解和编排任�
 
 ## 启动
 
-先确保系统环境变量中存在 `OPENCODE_API_KEY`，然后打开一个新的 PowerShell：
-
-```powershell
-.\start.ps1
-```
-
-### Python 环境
-
-项目使用 [uv](https://docs.astral.sh/uv/) 管理 Python 环境和依赖。先在项目根目录同步锁定的依赖：
+新设备首次准备时，在项目根目录执行：
 
 ```powershell
 uv sync --locked
-```
-
-### 新设备首次准备
-
-淘宝商品数据集由 Hugging Face 下载到仓库内的默认位置。首次在新设备上使用时，在项目根目录执行：
-
-```powershell
-uv sync --locked
+Copy-Item .env.example .env
+# 编辑 .env，填写 OPENCODE_API_KEY 和可选 Langfuse credentials
 
 uvx --from huggingface-hub hf download Helios1208/taobao-product-context `
   --repo-type dataset `
@@ -33,9 +19,16 @@ uvx --from huggingface-hub hf download Helios1208/taobao-product-context `
 .\start.ps1
 ```
 
+```text
+.env          本机 secrets/config，不提交
+.env.example  配置模板，提交到 repo
+```
+
+项目使用 [uv](https://docs.astral.sh/uv/) 管理 Python 环境和依赖。运行时只使用 repo-local `.venv` 中的持久 Python Worker；`uv` 仅负责 setup 和依赖管理。
+
 数据集配置统一位于 [`shop-agent.config.ts`](./shop-agent.config.ts) 的 `paths` 字段，运行时会自动解析为当前仓库的绝对路径，无需修改机器相关路径。
 
-运行时只使用 repo-local `.venv` 中的持久 Python Worker；`uv` 仅负责 setup 和依赖管理。检查配置、`.venv`、Python 依赖、数据集和认证但不打开 TUI：
+检查配置、`.venv`、Python 依赖、数据集和认证但不打开 TUI：
 
 ```powershell
 .\start.ps1 -Check

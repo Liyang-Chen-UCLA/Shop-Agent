@@ -224,6 +224,6 @@ export function createModelRuntime(tracing: Tracing = new NoopTracing()): ModelR
 export async function checkOpenCodeAuth(runtime: ModelRuntime): Promise<void> {
   const auth = await runtime.models.checkAuth("opencode-go");
   if (!auth) {
-    throw new Error("OPENCODE_API_KEY is not configured in the system environment.");
+    throw new Error("OPENCODE_API_KEY is not configured in the environment.");
   }
 }
