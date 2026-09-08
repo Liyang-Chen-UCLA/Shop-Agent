@@ -11,7 +11,7 @@ import type { NativeToolRuntimeContext } from "./types.ts";
 export const WEB_SEARCH_TOOL = "web_search";
 export const DEVELOPER_ISSUE_TOOL = "report_developer_issue";
 export const NATIVE_TOOL_NAMES = [WEB_SEARCH_TOOL, DEVELOPER_ISSUE_TOOL] as const;
-export const WEB_SEARCH_MODEL = "hy3";
+export const WEB_SEARCH_MODEL = "mimo-v2.5";
 export const WEB_SEARCH_THINKING = "off" as const;
 export const SEARCH_TRUNCATION_MARKER = "[搜索结果因长度限制已截断]";
 export const SEARCH_RESULT_MAX_CHARS = 8_000;
