@@ -1,5 +1,6 @@
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { PythonToolDefinition, PythonToolRuntimeContext, ResolvedAgentProfile } from "../types.ts";
+import type { TraceContext } from "../tracing/index.ts";
 
 export type ChildRequest = {
   runId: string;
@@ -18,6 +19,8 @@ export type ChildRequest = {
   model: string;
   thinking: ThinkingLevel;
   tools: PythonToolDefinition[];
+  attempt: number;
+  traceContext?: TraceContext;
 };
 
 export type ChildEvent =
@@ -34,4 +37,5 @@ export type ChildEvent =
 
 export type ParentEvent =
   | { type: "python_response"; id: string; ok: true; result: unknown }
-  | { type: "python_response"; id: string; ok: false; error: string };
+  | { type: "python_response"; id: string; ok: false; error: string }
+  | { type: "abort"; reason: "user" | "timeout" };

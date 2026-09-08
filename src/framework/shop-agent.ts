@@ -5,13 +5,14 @@ import { loadConfig } from "./config.ts";
 import { checkOpenCodeAuth, createModelRuntime, type ModelRuntime } from "./model-runtime.ts";
 import { discoverPythonTools, createPythonAgentTools } from "./python-tools.ts";
 import { createNativeAgentToolSet, isNativeToolName } from "./native-tools.ts";
-import { isDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticMessages } from "./content.ts";
+import { isDeveloperDiagnosticAgentEvent, messageText, sanitizeDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticMessages } from "./content.ts";
 import { SessionStore } from "./session-store.ts";
 import { Logger } from "./logger.ts";
 import { SubagentManager } from "./subagents/manager.ts";
 import { createDelegationTool } from "./subagents/tool.ts";
 import { composeSystemPrompt } from "./system-prompt.ts";
 import { PythonWorker } from "./python-worker.ts";
+import { createTracing, traceTools, type TraceObservation, type Tracing } from "./tracing/index.ts";
 import type {
   LoadedSession,
   ResolvedAgentProfile,
@@ -31,6 +32,8 @@ export type CreateShopAgentOptions = {
   configPath?: string;
   config?: ShopAgentConfigInput;
   skipAuthCheck?: boolean;
+  /** Test/embedding hook; production tracing is otherwise created only from environment variables. */
+  tracing?: Tracing;
 };
 
 export class ShopAgent {
@@ -40,11 +43,13 @@ export class ShopAgent {
   readonly logger: Logger;
   readonly subagents: SubagentManager;
   readonly python: PythonWorker;
+  readonly tracing: Tracing;
   private readonly toolDefinitions: Map<string, import("./types.ts").PythonToolDefinition>;
   private readonly listeners = new Set<Listener>();
   private unsubscribeAgent?: () => void;
   private savedMessageCount = 0;
   private session: LoadedSession;
+  private currentTurnTrace?: TraceObservation;
   agent: Agent;
 
   private constructor(
@@ -54,6 +59,7 @@ export class ShopAgent {
     logger: Logger,
     subagents: SubagentManager,
     python: PythonWorker,
+    tracing: Tracing,
     toolDefinitions: Map<string, import("./types.ts").PythonToolDefinition>,
     session: LoadedSession,
     agent: Agent,
@@ -64,6 +70,7 @@ export class ShopAgent {
     this.logger = logger;
     this.subagents = subagents;
     this.python = python;
+    this.tracing = tracing;
     this.toolDefinitions = toolDefinitions;
     this.session = session;
     this.agent = agent;
@@ -82,8 +89,9 @@ export class ShopAgent {
     }
     const python = new PythonWorker(cwd, config.python, definitions);
     await python.start();
+    const tracing = options.tracing ?? createTracing();
     try {
-      const runtime = createModelRuntime();
+      const runtime = createModelRuntime(tracing);
       if (!options.skipAuthCheck) await checkOpenCodeAuth(runtime);
       const defaultModel = runtime.getModel(config.defaultModel);
       runtime.ensureThinking(defaultModel, config.defaultThinking);
@@ -91,12 +99,13 @@ export class ShopAgent {
       const sessions = new SessionStore(dataDirectory);
       const logger = new Logger(dataDirectory);
       const session = await sessions.create(config.defaultModel, config.defaultThinking);
-      const subagents = new SubagentManager(config, definitions, python);
+      const subagents = new SubagentManager(config, definitions, python, tracing);
       const placeholder = new Agent({ streamFn: runtime.streamSimple });
-      const app = new ShopAgent(config, runtime, sessions, logger, subagents, python, definitions, session, placeholder);
+      const app = new ShopAgent(config, runtime, sessions, logger, subagents, python, tracing, definitions, session, placeholder);
       app.replaceAgent(app.buildAgent(session));
       return app;
     } catch (error) {
+      try { await tracing.shutdown(); } catch { /* tracing must not mask startup errors */ }
       await python.close();
       throw error;
     }
@@ -145,12 +154,13 @@ export class ShopAgent {
       ));
     }
     tools.push(...nativeTools.tools);
+    const tracedTools = traceTools(tools, this.tracing);
     return new Agent({
       initialState: {
         systemPrompt: composeSystemPrompt(profile),
         model,
         thinkingLevel: session.metadata.thinking,
-        tools,
+        tools: tracedTools,
         messages: session.messages,
       },
       streamFn: this.runtime.streamSimple,
@@ -194,7 +204,31 @@ export class ShopAgent {
 
   async prompt(text: string): Promise<void> {
     if (this.isBusy) throw new Error("The agent is already working. Use /abort before sending another prompt.");
-    await this.agent.prompt(text);
+    const before = this.agent.state.messages.length;
+    try {
+      await this.tracing.withObservation("shop-turn", "agent", {
+        input: text,
+        metadata: { orchestrator: this.orchestrator.id },
+      }, async (observation) => {
+        this.currentTurnTrace = observation;
+        await this.agent.prompt(text);
+        const messages = this.agent.state.messages.slice(before);
+        const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+        const output = assistant ? messageText(assistant) : "";
+        const stopReason = assistant?.role === "assistant" ? assistant.stopReason : undefined;
+        const aborted = stopReason === "aborted";
+        observation?.update({
+          output,
+          level: aborted ? "WARNING" : this.agent.state.errorMessage ? "ERROR" : "DEFAULT",
+          statusMessage: this.agent.state.errorMessage ?? stopReason ?? "completed",
+          metadata: { orchestrator: this.orchestrator.id, outcome: aborted ? "aborted" : this.agent.state.errorMessage ? "error" : "success" },
+        });
+        if (aborted || this.agent.state.errorMessage) observation?.fail?.(this.agent.state.errorMessage ?? "User aborted", aborted);
+      }, this.session.metadata.id);
+    } finally {
+      this.currentTurnTrace = undefined;
+      try { await this.tracing.flush(); } catch { /* tracing must not affect a shop turn */ }
+    }
   }
 
   abort(): void {
@@ -207,6 +241,7 @@ export class ShopAgent {
     this.unsubscribeAgent = undefined;
     await this.subagents.close();
     await this.python.close();
+    try { await this.tracing.shutdown(); } catch { /* tracing must not affect shutdown */ }
   }
 
   async newSession(): Promise<SessionMetadata> {

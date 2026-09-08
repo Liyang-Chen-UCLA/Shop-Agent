@@ -18,6 +18,7 @@ import { DEVELOPER_ISSUE_TOOL, isNativeToolName, WEB_SEARCH_TOOL } from "../nati
 import { sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { validateWithTrustedValidator } from "../output-validator.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
+import { NoopTracing, type TraceObservation, type Tracing } from "../tracing/index.ts";
 
 type AgentOverride = { model?: string; thinking?: ThinkingLevel };
 
@@ -40,15 +41,18 @@ export class SubagentManager {
   private readonly config: ResolvedConfig;
   private readonly toolDefinitions: Map<string, PythonToolDefinition>;
   private readonly python?: PythonExecutor;
+  private readonly tracing: Tracing;
 
   constructor(
     config: ResolvedConfig,
     toolDefinitions: Map<string, PythonToolDefinition>,
     python?: PythonExecutor,
+    tracing: Tracing = new NoopTracing(),
   ) {
     this.config = config;
     this.toolDefinitions = toolDefinitions;
     this.python = python;
+    this.tracing = tracing;
   }
 
   listRuns(): RunSummary[] {
@@ -73,6 +77,14 @@ export class SubagentManager {
   }
 
   private async runSingle(options: RunOptions): Promise<RunResult> {
+    const name = options.profile.id.replaceAll("_", "-");
+    return this.tracing.withObservation(name, "agent", {
+      input: options.task,
+      metadata: { agent: options.profile.id },
+    }, (observation) => this.runSingleObserved(options, observation));
+  }
+
+  private async runSingleObserved(options: RunOptions, observation?: TraceObservation): Promise<RunResult> {
     const runId = randomUUID();
     const detail: RunDetail = {
       id: runId,
@@ -108,6 +120,8 @@ export class SubagentManager {
       model: detail.model,
       thinking: detail.thinking,
       tools,
+      attempt: 1,
+      traceContext: this.tracing.context(options.sessionId ?? runId),
     };
 
     const attempts = Math.max(1, (options.profile.maxRetries ?? 0) + 1);
@@ -116,7 +130,9 @@ export class SubagentManager {
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       lastAttempt = attempt;
       try {
-        return await this.runAttempt(request, runDirectory, detail, attempt, options.signal, options.onUpdate);
+        const result = await this.runAttempt({ ...request, attempt }, runDirectory, detail, attempt, options.signal, options.onUpdate);
+        observation?.update({ output: result.value ?? result.text, metadata: { agent: options.profile.id, runId, attempts: attempt, outcome: "success" } });
+        return result;
       } catch (error) {
         lastError = error;
         if (options.signal?.aborted || attempt === attempts) break;
@@ -139,6 +155,8 @@ export class SubagentManager {
       message: detail.error,
     }, options.onUpdate);
     await this.saveSummary(runDirectory, detail);
+    observation?.fail?.(lastError, Boolean(options.signal?.aborted));
+    observation?.update({ output: { error: detail.error }, metadata: { agent: options.profile.id, runId, attempts: lastAttempt, outcome: detail.state } });
     throw lastError;
   }
 
@@ -220,24 +238,53 @@ export class SubagentManager {
   }
 
   private async runCriteriaAndMarket(options: RunOptions): Promise<RunResult> {
+    return this.tracing.withObservation("build-market-criteria", "chain", {
+      input: options.task,
+    }, async (chain) => {
     const marketProfile = this.config.agents.find((profile) => profile.id === "market_agent");
-    if (!marketProfile) return this.runSingle(options);
-    const cached = await this.cachedMarket(options.task);
-    if (cached) return cached;
+    if (!marketProfile) {
+      const result = await this.runSingle(options);
+      chain?.update({ output: result.value ?? result.text, metadata: { marketProfile: false } });
+      return result;
+    }
+    const cached = await this.tracing.withObservation("check-market-cache", "span", { input: this.routeFromTask(options.task) }, async (span) => {
+      const result = await this.cachedMarket(options.task);
+      span?.update({ output: { hit: Boolean(result) }, metadata: { cache: "market", hit: Boolean(result) } });
+      return result;
+    });
+    if (cached) {
+      chain?.update({ output: cached.value ?? cached.text, metadata: { cache: "market", hit: true } });
+      return cached;
+    }
     const sessionId = options.sessionId ?? "unknown-session";
-    if (await this.hasBase(options.task)) {
-      return this.runSingle({
+    const hasBase = await this.tracing.withObservation("check-base-cache", "span", { input: this.routeFromTask(options.task) }, async (span) => {
+      const hit = await this.hasBase(options.task);
+      span?.update({ output: { hit }, metadata: { cache: "base", hit } });
+      return hit;
+    });
+    if (hasBase) {
+      const result = await this.runSingle({
         ...options,
         profile: marketProfile,
         task: this.marketTask(options.task),
       });
+      chain?.update({ output: result.value ?? result.text, metadata: { cache: "base", hit: true } });
+      return result;
     }
     const criteria = await this.runSingle(options);
-    await this.persistBaseCriteria(criteria, sessionId, criteria.runId);
-    return this.runSingle({
+    await this.tracing.withObservation("persist-base", "span", {
+      input: { runId: criteria.runId },
+    }, async (span) => {
+      await this.persistBaseCriteria(criteria, sessionId, criteria.runId);
+      span?.update({ output: { persisted: true } });
+    });
+    const result = await this.runSingle({
       ...options,
       profile: marketProfile,
       task: this.marketTask(options.task),
+    });
+    chain?.update({ output: result.value ?? result.text, metadata: { cache: "miss" } });
+    return result;
     });
   }
 
@@ -266,10 +313,15 @@ export class SubagentManager {
     let reportedWriting = false;
     const pythonRequests = new Map<string, AbortController>();
 
-    const abort = () => this.terminate(child);
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    const requestStop = (reason: "user" | "timeout") => {
+      if (child.stdin.writable) child.stdin.write(`${JSON.stringify({ type: "abort", reason })}\n`);
+      stopTimer ??= setTimeout(() => this.terminate(child), 3_000);
+    };
+    const abort = () => requestStop("user");
     const timeout = setTimeout(() => {
       timedOut = true;
-      this.terminate(child);
+      requestStop("timeout");
     }, request.profile.timeoutMs ?? 120_000);
     signal?.addEventListener("abort", abort, { once: true });
     child.stdout.setEncoding("utf8");
@@ -349,6 +401,7 @@ export class SubagentManager {
       for (const controller of pythonRequests.values()) controller.abort();
       pythonRequests.clear();
       clearTimeout(timeout);
+      if (stopTimer) clearTimeout(stopTimer);
       signal?.removeEventListener("abort", abort);
     });
 

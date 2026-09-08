@@ -9,6 +9,7 @@ import { composeSystemPrompt } from "../system-prompt.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { createInterface } from "node:readline";
 import { ChildPythonProxy } from "./python-proxy.ts";
+import { createTracing, traceTools, type TraceObservation } from "../tracing/index.ts";
 
 function emit(event: ChildEvent): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -22,10 +23,24 @@ async function readRequest(): Promise<{ request: ChildRequest; lines: ReturnType
 
 async function main(): Promise<void> {
   const { request, lines } = await readRequest();
+  const tracing = createTracing({ exportMode: "immediate" });
   const python = new ChildPythonProxy(lines, emit);
+  let agent: Agent | undefined;
+  let abortReason: "user" | "timeout" | undefined;
+  const receiveAbort = (line: string) => {
+    try {
+      const event = JSON.parse(line) as { type?: string; reason?: "user" | "timeout" };
+      if (event.type === "abort") {
+        abortReason = event.reason ?? "user";
+        agent?.abort();
+      }
+    } catch { /* ignore non-JSON input */ }
+  };
+  lines.on("line", receiveAbort);
   try {
+  const execute = async (observation?: TraceObservation) => {
   emit({ type: "status", state: "starting", message: `Starting ${request.profile.id}` });
-  const runtime = createModelRuntime();
+  const runtime = createModelRuntime(tracing);
   const model = runtime.getModel(request.model);
   runtime.ensureThinking(model, request.thinking);
   const definitions = new Map(request.tools.map((tool) => [tool.name, tool]));
@@ -46,8 +61,7 @@ async function main(): Promise<void> {
     getRuntimeContext: () => ({ sessionId: request.sessionId, agentName: request.profile.id, projectRoot: request.projectRoot }),
     webSearchPolicy: request.profile.webSearchPolicy ?? (request.profile.id === "market_agent" ? "market" : "criteria"),
   });
-  const tools = [...pythonTools, ...nativeToolSet.tools];
-  let agent: Agent;
+  const tools = traceTools([...pythonTools, ...nativeToolSet.tools], tracing);
   const validationController = createOutputValidationController({
     profile: request.profile,
     python,
@@ -56,7 +70,7 @@ async function main(): Promise<void> {
       operation: request.profile.id === "market_agent" ? "publish_market" : undefined,
       searchStats: nativeToolSet.searchStats,
     }),
-    steer: (message) => agent.steer(message),
+    steer: (message) => agent!.steer(message),
   });
   agent = new Agent({
     initialState: {
@@ -94,6 +108,11 @@ async function main(): Promise<void> {
   await agent.prompt(request.task);
   if (validationController.state.terminalError) throw new Error(validationController.state.terminalError);
   const finalMessage = [...agent.state.messages].reverse().find((message) => message.role === "assistant");
+  if (finalMessage?.role === "assistant" && finalMessage.stopReason === "aborted") {
+    const timedOut = abortReason === "timeout";
+    observation?.fail?.(timedOut ? "Subagent attempt timed out." : "Subagent was aborted by the user.", !timedOut);
+    throw new Error(timedOut ? `Subagent '${request.profile.id}' timed out.` : `Subagent '${request.profile.id}' was aborted.`);
+  }
   const text = finalMessage ? messageText(finalMessage) : "";
   if (!text && agent.state.errorMessage) throw new Error(agent.state.errorMessage);
 
@@ -135,9 +154,23 @@ async function main(): Promise<void> {
       value = validationController.state.validatedValue;
     }
   }
+  observation?.update({
+    output: value ?? text,
+    metadata: { agent: request.profile.id, runId: request.runId, attempt: request.attempt, outcome: "success" },
+  });
   emit({ type: "result", text, value, messages: sanitizeDeveloperDiagnosticMessages(agent.state.messages) });
+  };
+  const attributes = { input: request.task, metadata: { agent: request.profile.id, runId: request.runId, attempt: request.attempt } };
+  if (request.traceContext) {
+    await tracing.withRemoteObservation(`attempt-${request.attempt}`, "span", attributes, request.traceContext, execute);
+  } else {
+    await tracing.withObservation(`attempt-${request.attempt}`, "span", attributes, execute, request.sessionId);
+  }
   } finally {
     await python.close();
+    lines.removeListener("line", receiveAbort);
+    await tracing.flush(1_000);
+    await tracing.shutdown(1_000);
     lines.close();
     process.stdin.pause();
   }
