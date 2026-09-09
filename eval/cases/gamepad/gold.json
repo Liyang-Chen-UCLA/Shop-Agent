@@ -26,7 +26,8 @@
       "formula": null,
       "direction": {
         "type": "smaller_better"
-      }
+      },
+      "evidence_item_ids": []
     },
     {
       "id": "report_rate",
@@ -43,7 +44,8 @@
       "formula": null,
       "direction": {
         "type": "larger_better"
-      }
+      },
+      "evidence_item_ids": []
     },
     {
       "id": "stick_center_error",
@@ -59,7 +61,10 @@
       "formula": null,
       "direction": {
         "type": "smaller_better"
-      }
+      },
+      "evidence_item_ids": [
+        "688995695211"
+      ]
     },
     {
       "id": "button_lifetime",
@@ -76,7 +81,11 @@
       "formula": null,
       "direction": {
         "type": "larger_better"
-      }
+      },
+      "evidence_item_ids": [
+        "844285076150",
+        "837987833992"
+      ]
     },
     {
       "id": "stick_lifetime",
@@ -93,7 +102,11 @@
       "formula": null,
       "direction": {
         "type": "larger_better"
-      }
+      },
+      "evidence_item_ids": [
+        "830675215338",
+        "688995695211"
+      ]
     },
     {
       "id": "battery_runtime",
@@ -109,7 +122,13 @@
       "formula": null,
       "direction": {
         "type": "larger_better"
-      }
+      },
+      "evidence_item_ids": [
+        "788146516430",
+        "855048143554",
+        "871813989306",
+        "855985116346"
+      ]
     },
     {
       "id": "charging_time",
@@ -126,7 +145,11 @@
       "formula": null,
       "direction": {
         "type": "smaller_better"
-      }
+      },
+      "evidence_item_ids": [
+        "788146516430",
+        "844285076150"
+      ]
     }
   ],
   "attributes": [
@@ -143,7 +166,14 @@
         "触屏辅助按键",
         "保护套/握把配件"
       ],
-      "value_domain": "open"
+      "value_domain": "open",
+      "evidence_item_ids": [
+        "855048143554",
+        "824485989445",
+        "871813989306",
+        "839166304553",
+        "816253993308"
+      ]
     },
     {
       "id": "compatible_platform",
@@ -166,7 +196,8 @@
         "Android TV",
         "车机"
       ],
-      "value_domain": "open"
+      "value_domain": "open",
+      "evidence_item_ids": []
     },
     {
       "id": "connection_mode",
@@ -183,7 +214,8 @@
         "星闪",
         "触屏物理传导"
       ],
-      "value_domain": "open"
+      "value_domain": "open",
+      "evidence_item_ids": []
     },
     {
       "id": "stick_sensor",
@@ -199,7 +231,13 @@
         "TMR",
         "磁变阻（未细分）"
       ],
-      "value_domain": "open"
+      "value_domain": "open",
+      "evidence_item_ids": [
+        "876074628579",
+        "844285076150",
+        "837987833992",
+        "830675215338"
+      ]
     },
     {
       "id": "trigger_mode",
@@ -215,7 +253,13 @@
         "微动数字",
         "霍尔线性/微动双切"
       ],
-      "value_domain": "open"
+      "value_domain": "open",
+      "evidence_item_ids": [
+        "855048143554",
+        "844285076150",
+        "830675215338",
+        "837987833992"
+      ]
     },
     {
       "id": "body_weight",
@@ -228,7 +272,15 @@
       "units": [
         "克"
       ],
-      "formula": null
+      "formula": null,
+      "evidence_item_ids": [
+        "855048143554",
+        "844285076150",
+        "830675215338",
+        "688995695211",
+        "855985116346",
+        "876074628579"
+      ]
     },
     {
       "id": "battery_capacity",
@@ -239,7 +291,8 @@
       "units": [
         "mAh"
       ],
-      "formula": null
+      "formula": null,
+      "evidence_item_ids": []
     },
     {
       "id": "remapping",
@@ -248,7 +301,13 @@
       "aliases": [
         "键位映射"
       ],
-      "type": "boolean"
+      "type": "boolean",
+      "evidence_item_ids": [
+        "788146516430",
+        "824485989445",
+        "844285076150",
+        "837987833992"
+      ]
     },
     {
       "id": "turbo",
@@ -257,7 +316,15 @@
       "aliases": [
         "TURBO"
       ],
-      "type": "boolean"
+      "type": "boolean",
+      "evidence_item_ids": [
+        "855048143554",
+        "937103245564",
+        "918087254574",
+        "824485989445",
+        "798258208001",
+        "844285076150"
+      ]
     },
     {
       "id": "motion_control",
@@ -266,7 +333,15 @@
       "aliases": [
         "体感输入"
       ],
-      "type": "boolean"
+      "type": "boolean",
+      "evidence_item_ids": [
+        "788146516430",
+        "844285076150",
+        "837987833992",
+        "830675215338",
+        "688995695211",
+        "855985116346"
+      ]
     },
     {
       "id": "vibration",
@@ -275,7 +350,17 @@
       "aliases": [
         "振动反馈"
       ],
-      "type": "boolean"
+      "type": "boolean",
+      "evidence_item_ids": [
+        "855048143554",
+        "837987833992",
+        "871813989306",
+        "7835436172",
+        "830675215338",
+        "688995695211",
+        "855985116346",
+        "876074628579"
+      ]
     },
     {
       "id": "dock_support",
@@ -284,7 +369,12 @@
       "aliases": [
         "充电底座支持"
       ],
-      "type": "boolean"
+      "type": "boolean",
+      "evidence_item_ids": [
+        "844285076150",
+        "837987833992",
+        "830675215338"
+      ]
     },
     {
       "id": "headset_jack",
@@ -293,14 +383,20 @@
       "aliases": [
         "耳机接口"
       ],
-      "type": "boolean"
+      "type": "boolean",
+      "evidence_item_ids": [
+        "876074628579"
+      ]
     },
     {
       "id": "nfc",
       "name": "NFC功能",
       "description": "是否明确支持NFC，注明平台和用途；OCR拼成NEC且无其他佐证时保留歧义，不能静默改字。",
       "aliases": [],
-      "type": "boolean"
+      "type": "boolean",
+      "evidence_item_ids": [
+        "830675215338"
+      ]
     },
     {
       "id": "supported_thickness",
@@ -311,7 +407,11 @@
       "units": [
         "毫米"
       ],
-      "formula": null
+      "formula": null,
+      "evidence_item_ids": [
+        "918087254574",
+        "615296813917"
+      ]
     },
     {
       "id": "stick_resolution",
@@ -323,7 +423,11 @@
         "级",
         "bit"
       ],
-      "formula": null
+      "formula": null,
+      "evidence_item_ids": [
+        "830675215338",
+        "688995695211"
+      ]
     },
     {
       "id": "deadzone_adjustable",
@@ -332,7 +436,11 @@
       "aliases": [
         "死区调节"
       ],
-      "type": "boolean"
+      "type": "boolean",
+      "evidence_item_ids": [
+        "844285076150",
+        "830675215338"
+      ]
     },
     {
       "id": "input_protocol",
@@ -345,8 +453,10 @@
         "DInput",
         "HID"
       ],
-      "value_domain": "open"
+      "value_domain": "open",
+      "evidence_item_ids": [
+        "824485989445"
+      ]
     }
   ]
 }
-
