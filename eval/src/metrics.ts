@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeLabel } from "./matching.ts";
-import type { FieldDiff, ItemPairing, SessionMetrics } from "./types.ts";
+import type { DefinitionResult, ItemPairing, SessionMetrics } from "./types.ts";
 
 const MATCHED_FIELDS = ["type", "direction", "units", "values", "value_domain"] as const;
 
@@ -51,6 +51,7 @@ function f1(precision: number, recall: number): number {
 
 export function calculateMetrics(
   pairings: readonly ItemPairing[],
+  definitionResults: readonly DefinitionResult[],
   goldCounts: { criteria: number; attribute: number },
   predCounts: { criteria: number; attribute: number },
 ): SessionMetrics {
@@ -63,8 +64,10 @@ export function calculateMetrics(
 
   let applicableFields = 0;
   let correctFields = 0;
-  for (const pairing of pairings) {
-    const differences = new Set(fieldDiffs(pairing).map((item) => item.field));
+  for (const [index, pairing] of pairings.entries()) {
+    const definition = definitionResults[index];
+    if (!definition) throw new Error(`Missing definition result for pairing ${index}.`);
+    const differences = new Set(definition.final_diffs.map((item) => item.field));
     for (const field of MATCHED_FIELDS) {
       if (!Object.hasOwn(pairing.gold.item, field) && !Object.hasOwn(pairing.pred.item, field)) continue;
       applicableFields += 1;

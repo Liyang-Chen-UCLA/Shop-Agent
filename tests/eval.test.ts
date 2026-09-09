@@ -11,6 +11,7 @@ import { LangfuseEvalTelemetry } from "../eval/src/telemetry.ts";
 import type { ModelRuntime } from "../src/framework/model-runtime.ts";
 import type {
   CriteriaDocument,
+  DefinitionJudge,
   DefinitionJudgeInput,
   EvalResult,
   EvalTelemetry,
@@ -110,6 +111,7 @@ async function evaluate(
   prediction: CriteriaDocument,
   base?: CriteriaDocument,
   matcher: SemanticMatcher = noSemanticMatches,
+  definitionJudge?: DefinitionJudge,
 ): Promise<{ result: EvalResult; telemetry: MockTelemetry }> {
   const telemetry = new MockTelemetry();
   const result = await runEvaluation({
@@ -118,7 +120,7 @@ async function evaluate(
     gold,
     prediction,
     base,
-  }, matcher, telemetry);
+  }, matcher, telemetry, definitionJudge);
   return { result, telemetry };
 }
 
@@ -223,7 +225,7 @@ test("definition judge skips the LLM when rule fieldDiffs are empty", async () =
 
   const result = await judge.judge(input);
   assert.equal(calls(), 0);
-  assert.deepEqual(result, { rule_diffs: [], judgments: [] });
+  assert.deepEqual(result, { rule_diffs: [], final_diffs: [], judgments: [] });
 });
 
 test("definition judge can mark 小时 and hour as semantically equivalent", async () => {
@@ -238,6 +240,7 @@ test("definition judge can mark 小时 and hour as semantically equivalent", asy
   ));
   assert.equal(calls(), 1);
   assert.deepEqual(result.rule_diffs.map((item) => item.field), ["units"]);
+  assert.deepEqual(result.final_diffs, []);
   assert.deepEqual(result.judgments, [{
     field: "units",
     equivalent: true,
@@ -255,6 +258,7 @@ test("definition judge keeps 小时 and 分钟 semantically different", async ()
     numeric("latency", "Latency", ["小时"]),
     numeric("response_time", "Latency", ["分钟"]),
   ));
+  assert.deepEqual(result.final_diffs.map((item) => item.field), ["units"]);
   assert.equal(result.judgments[0]?.equivalent, false);
 });
 
@@ -273,6 +277,58 @@ test("definition judge supports partial semantic overrides across multiple field
     { field: "direction", equivalent: false },
     { field: "units", equivalent: true },
   ]);
+  assert.deepEqual(result.final_diffs.map((item) => item.field), ["direction"]);
+});
+
+test("evaluation uses empty final diffs for an equivalent 小时/hour unit", async () => {
+  const { runtime } = fakeDefinitionRuntime(JSON.stringify({ judgments: [
+    { field: "units", equivalent: true, reason: "小时 and hour are equivalent." },
+  ] }));
+  const definitionJudge = new ModelDefinitionJudge(runtime, "judge", "session-1");
+  const { result } = await evaluate(
+    document([numeric("latency", "Latency", ["小时"])]),
+    document([numeric("response_time", "Latency", ["hour"])]),
+    undefined,
+    noSemanticMatches,
+    definitionJudge,
+  );
+
+  assert.equal(result.metrics.matched_item_field_accuracy, 1);
+  assert.equal(result.failures.some((item) => item.diff_type === "wrong_definition"), false);
+});
+
+test("evaluation retains a final diff for non-equivalent 小时/minute units", async () => {
+  const { runtime } = fakeDefinitionRuntime(JSON.stringify({ judgments: [
+    { field: "units", equivalent: false, reason: "小时 and 分钟 are different units." },
+  ] }));
+  const definitionJudge = new ModelDefinitionJudge(runtime, "judge", "session-1");
+  const { result } = await evaluate(
+    document([numeric("latency", "Latency", ["小时"])]),
+    document([numeric("response_time", "Latency", ["分钟"])]),
+    undefined,
+    noSemanticMatches,
+    definitionJudge,
+  );
+
+  const failure = result.failures.find((item) => item.diff_type === "wrong_definition");
+  assert.deepEqual(failure?.field_diffs?.map((item) => item.field), ["units"]);
+  assert.equal(result.metrics.matched_item_field_accuracy, 2 / 3);
+});
+
+test("wrong_kind remains independent and can coexist with wrong_definition", async () => {
+  const { runtime } = fakeDefinitionRuntime(JSON.stringify({ judgments: [
+    { field: "units", equivalent: false, reason: "The units differ." },
+  ] }));
+  const definitionJudge = new ModelDefinitionJudge(runtime, "judge", "session-1");
+  const { result } = await evaluate(
+    document([numeric("latency", "Latency", ["小时"])]),
+    document([], [numeric("latency", "Latency", ["分钟"])]),
+    undefined,
+    noSemanticMatches,
+    definitionJudge,
+  );
+
+  assert.deepEqual(new Set(result.failures.map((item) => item.diff_type)), new Set(["wrong_kind", "wrong_definition"]));
 });
 
 test("definition judge fails closed and preserves rule diffs on LLM exception or malformed output", async () => {
@@ -289,6 +345,7 @@ test("definition judge fails closed and preserves rule diffs on LLM exception or
     const judge = new ModelDefinitionJudge(runtime, "judge", "session-1");
     const result = await judge.judge(definitionInput(gold, pred));
     assert.deepEqual(result.rule_diffs, expectedDiffs);
+    assert.deepEqual(result.final_diffs, expectedDiffs);
     assert.deepEqual(result.judgments.map((item) => item.equivalent), [false]);
   }
 });

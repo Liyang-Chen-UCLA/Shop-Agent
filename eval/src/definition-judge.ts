@@ -109,6 +109,7 @@ function itemForPrompt(input: DefinitionJudgeInput, fields: readonly FieldDiff["
 function failClosed(ruleDiffs: readonly FieldDiff[]): DefinitionResult {
   return {
     rule_diffs: [...ruleDiffs],
+    final_diffs: [...ruleDiffs],
     judgments: ruleDiffs.map((diff) => ({
       field: diff.field,
       equivalent: false,
@@ -138,7 +139,7 @@ export class ModelDefinitionJudge implements DefinitionJudge {
   async judge(input: DefinitionJudgeInput): Promise<DefinitionResult> {
     const pairing: ItemPairing = { gold: input.gold, pred: input.pred, method: "id" };
     const ruleDiffs = fieldDiffs(pairing);
-    if (!ruleDiffs.length) return { rule_diffs: [], judgments: [] };
+    if (!ruleDiffs.length) return { rule_diffs: [], final_diffs: [], judgments: [] };
 
     try {
       const model = this.runtime.getModel(this.modelId);
@@ -161,9 +162,11 @@ export class ModelDefinitionJudge implements DefinitionJudge {
       if (response.stopReason === "error" || response.stopReason === "aborted") {
         throw new Error(`Definition judge model request failed: ${response.errorMessage ?? response.stopReason}`);
       }
+      const judgments = parseJudgments(parseJsonObject(messageText(response)), ruleDiffs);
       return {
         rule_diffs: [...ruleDiffs],
-        judgments: parseJudgments(parseJsonObject(messageText(response)), ruleDiffs),
+        final_diffs: ruleDiffs.filter((diff) => !judgments.find((judgment) => judgment.field === diff.field)?.equivalent),
+        judgments,
       };
     } catch {
       return failClosed(ruleDiffs);

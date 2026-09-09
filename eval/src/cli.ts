@@ -2,6 +2,7 @@
 import { loadConfig } from "../../src/framework/config.ts";
 import { createModelRuntime } from "../../src/framework/model-runtime.ts";
 import { SessionStore } from "../../src/framework/session-store.ts";
+import { ModelDefinitionJudge } from "./definition-judge.ts";
 import { loadEvalCase, loadPredictionArtifacts } from "./loaders.ts";
 import { runEvaluation } from "./pipeline.ts";
 import { ModelSemanticMatcher } from "./semantic-matcher.ts";
@@ -68,13 +69,19 @@ async function main(): Promise<void> {
       session.metadata.id,
       config.defaultThinking,
     );
+    const definitionJudge = new ModelDefinitionJudge(
+      runtime,
+      config.defaultModel,
+      session.metadata.id,
+      config.defaultThinking,
+    );
     const result = await runEvaluation({
       caseId,
       sessionId: session.metadata.id,
       gold,
       prediction,
       base,
-    }, matcher, telemetry);
+    }, matcher, telemetry, definitionJudge);
     await telemetry.flush();
     process.stdout.write(`${formatSummary(result)}\n`);
   } finally {

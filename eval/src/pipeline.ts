@@ -1,12 +1,13 @@
 import { createFailureUnits } from "./attribution.ts";
 import { matchDocuments } from "./matching.ts";
-import { calculateMetrics } from "./metrics.ts";
-import type { EvalResult, EvalTelemetry, EvaluationInput, SemanticMatcher } from "./types.ts";
+import { fieldDiffs, calculateMetrics } from "./metrics.ts";
+import type { DefinitionJudge, DefinitionResult, EvalResult, EvalTelemetry, EvaluationInput, SemanticMatcher } from "./types.ts";
 
 export async function runEvaluation(
   input: EvaluationInput,
   matcher: SemanticMatcher,
   telemetry: EvalTelemetry,
+  definitionJudge?: DefinitionJudge,
 ): Promise<EvalResult> {
   if (input.gold.node.id !== input.prediction.node.id) {
     throw new Error(
@@ -26,8 +27,15 @@ export async function runEvaluation(
       matcher,
       (semanticInput, run) => telemetry.observeSemanticMatch(semanticInput, run),
     );
+    const definitionResults: DefinitionResult[] = definitionJudge
+      ? await Promise.all(matched.pairings.map((pair) => definitionJudge.judge({ gold: pair.gold, pred: pair.pred })))
+      : matched.pairings.map((pair) => {
+        const ruleDiffs = fieldDiffs(pair);
+        return { rule_diffs: ruleDiffs, final_diffs: ruleDiffs, judgments: [] };
+      });
     const metrics = calculateMetrics(
       matched.pairings,
+      definitionResults,
       { criteria: input.gold.criteria.length, attribute: input.gold.attributes.length },
       { criteria: input.prediction.criteria.length, attribute: input.prediction.attributes.length },
     );
@@ -36,6 +44,7 @@ export async function runEvaluation(
       matched.unmatchedGold,
       matched.unmatchedPred,
       input.base,
+      definitionResults,
     );
     const result: EvalResult = {
       case_id: input.caseId,

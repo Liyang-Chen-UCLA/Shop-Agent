@@ -2,6 +2,7 @@ import { fieldDiffs } from "./metrics.ts";
 import { findRuleMatch, flattenItems } from "./matching.ts";
 import type {
   CriteriaDocument,
+  DefinitionResult,
   DiffType,
   EarliestDivergence,
   EvaluatedItem,
@@ -86,6 +87,7 @@ export function createFailureUnits(
   unmatchedGold: readonly EvaluatedItem[],
   unmatchedPred: readonly EvaluatedItem[],
   base?: CriteriaDocument,
+  definitionResults: readonly DefinitionResult[] = [],
 ): FailureUnit[] {
   const failures: FailureUnit[] = [];
   const baseItems = base ? flattenItems(base) : undefined;
@@ -98,7 +100,7 @@ export function createFailureUnits(
     failures.push(failure("extra", undefined, pred, "market_error"));
   }
 
-  for (const pairing of pairings) {
+  for (const [index, pairing] of pairings.entries()) {
     if (pairing.gold.kind !== pairing.pred.kind) {
       failures.push(failure(
         "wrong_kind",
@@ -107,7 +109,9 @@ export function createFailureUnits(
         matchedRootCause(pairing, "wrong_kind", undefined, baseItems),
       ));
     }
-    const differences = fieldDiffs(pairing);
+    const definition = definitionResults[index];
+    if (!definition) throw new Error(`Missing definition result for pairing ${index}.`);
+    const differences = definition.final_diffs;
     if (differences.length) {
       failures.push(failure(
         "wrong_definition",

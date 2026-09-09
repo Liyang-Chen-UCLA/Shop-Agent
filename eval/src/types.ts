@@ -67,6 +67,7 @@ export type DefinitionFieldJudgment = {
 
 export type DefinitionResult = {
   rule_diffs: FieldDiff[];
+  final_diffs: FieldDiff[];
   judgments: DefinitionFieldJudgment[];
 };
 
