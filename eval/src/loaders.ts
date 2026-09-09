@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { CriteriaDocument, CriteriaItem } from "./types.ts";
+import type { CriteriaDocument, CriteriaItem, MarketPredictionDocument, MarketPredictionItem } from "./types.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -47,6 +47,55 @@ export function parseCriteriaDocument(value: unknown, label: string): CriteriaDo
   } as CriteriaDocument;
 }
 
+function parseObservedProductIds(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) {
+    throw new Error(`${label}.observed_product_ids must be an array of non-empty strings.`);
+  }
+  const ids = value as string[];
+  if (new Set(ids).size !== ids.length) {
+    throw new Error(`${label}.observed_product_ids must contain unique product IDs.`);
+  }
+  return [...ids];
+}
+
+function normalizeMarketPredictionItem(item: CriteriaItem, label: string): MarketPredictionItem {
+  if (!Object.hasOwn(item, "observed_product_ids")) {
+    throw new Error(`${label}.observed_product_ids is required for a Market prediction item.`);
+  }
+  return {
+    ...item,
+    observed_product_ids: parseObservedProductIds(item.observed_product_ids, label),
+  };
+}
+
+function normalizeMarketPredictionDocument(
+  document: CriteriaDocument,
+  label: string,
+): MarketPredictionDocument {
+  return {
+    ...document,
+    criteria: document.criteria.map((item, index) => normalizeMarketPredictionItem(item, `${label}.criteria[${index}]`)),
+    attributes: document.attributes.map((item, index) => normalizeMarketPredictionItem(item, `${label}.attributes[${index}]`)),
+  };
+}
+
+export function parseMarketPredictionDocument(value: unknown, label: string): MarketPredictionDocument {
+  return normalizeMarketPredictionDocument(parseCriteriaDocument(value, label), label);
+}
+
+/** Keep only Market items observed in at least one trusted sampled product. */
+export function filterObservedMarketItems(
+  prediction: CriteriaDocument,
+  label = "Prediction market.json",
+): MarketPredictionDocument {
+  const normalized = normalizeMarketPredictionDocument(prediction, label);
+  return {
+    ...normalized,
+    criteria: normalized.criteria.filter((item) => item.observed_product_ids.length >= 1),
+    attributes: normalized.attributes.filter((item) => item.observed_product_ids.length >= 1),
+  };
+}
+
 async function readDocument(filePath: string, label: string): Promise<CriteriaDocument> {
   let raw: string;
   try {
@@ -74,14 +123,20 @@ export async function loadEvalCase(projectRoot: string, caseId: string): Promise
 export async function loadPredictionArtifacts(
   runtimeData: string,
   nodeId: string,
-): Promise<{ prediction: CriteriaDocument; base?: CriteriaDocument }> {
+): Promise<{ prediction: MarketPredictionDocument; base?: CriteriaDocument }> {
   const directory = path.join(runtimeData, "market-criteria", nodeId);
-  const prediction = await readDocument(path.join(directory, "market.json"), "Prediction market.json");
+  const prediction = parseMarketPredictionDocument(
+    await readDocument(path.join(directory, "market.json"), "Prediction market.json"),
+    "Prediction market.json",
+  );
   let base: CriteriaDocument | undefined;
   try {
     base = await readDocument(path.join(directory, "base.json"), "Attribution base.json");
   } catch (error) {
     if (!(error instanceof Error) || !error.message.startsWith("Attribution base.json not found:")) throw error;
   }
-  return { prediction, ...(base ? { base } : {}) };
+  return {
+    prediction: filterObservedMarketItems(prediction),
+    ...(base ? { base } : {}),
+  };
 }

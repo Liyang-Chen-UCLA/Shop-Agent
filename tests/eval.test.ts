@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ModelDefinitionJudge } from "../eval/src/definition-judge.ts";
-import { loadEvalCase } from "../eval/src/loaders.ts";
+import { loadEvalCase, loadPredictionArtifacts } from "../eval/src/loaders.ts";
 import { fieldDiffs } from "../eval/src/metrics.ts";
 import { runEvaluation } from "../eval/src/pipeline.ts";
 import { LangfuseEvalTelemetry } from "../eval/src/telemetry.ts";
@@ -58,6 +58,19 @@ function document(
   node = NODE,
 ): CriteriaDocument {
   return { node, criteria, attributes };
+}
+
+function marketPrediction(value: CriteriaDocument): CriteriaDocument {
+  const observed = (item: CriteriaDocument["criteria"][number]) => (
+    Object.hasOwn(item, "observed_product_ids")
+      ? item
+      : { ...item, observed_product_ids: ["test-product"] }
+  );
+  return {
+    ...value,
+    criteria: value.criteria.map(observed),
+    attributes: value.attributes.map(observed),
+  };
 }
 
 class MockTelemetry implements EvalTelemetry {
@@ -123,7 +136,7 @@ async function evaluate(
     caseId: "generic",
     sessionId: "session-1",
     gold,
-    prediction,
+    prediction: marketPrediction(prediction),
     base,
   }, matcher, telemetry, definitionJudge);
   return { result, telemetry };
@@ -134,11 +147,57 @@ test("loads any safe eval/cases/<case-id>/gold.json path", async () => {
   try {
     const directory = path.join(root, "eval", "cases", "camera");
     await mkdir(directory, { recursive: true });
-    await writeFile(path.join(directory, "gold.json"), JSON.stringify(document([numeric("latency")])), "utf8");
+    await writeFile(path.join(directory, "gold.json"), JSON.stringify(document([{
+      ...numeric("latency"),
+      evidence_item_ids: ["shopping-env-1"],
+    }])), "utf8");
     const loaded = await loadEvalCase(root, "camera");
     assert.equal(loaded.node.id, NODE.id);
     assert.equal(loaded.criteria[0].id, "latency");
+    assert.deepEqual(loaded.criteria[0].evidence_item_ids, ["shopping-env-1"]);
     await assert.rejects(() => loadEvalCase(root, "../escape"), /safe case id/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("filters unobserved Market items while preserving the unfiltered base artifact", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-eval-artifacts-"));
+  try {
+    const directory = path.join(root, "market-criteria", NODE.id);
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "market.json"), JSON.stringify(document(
+      [{ ...numeric("A"), observed_product_ids: [] }, { ...numeric("B"), observed_product_ids: ["p1"] }],
+      [{ ...categorical("C"), observed_product_ids: [] }, { ...categorical("D"), observed_product_ids: ["p1"] }],
+    )), "utf8");
+    await writeFile(path.join(directory, "base.json"), JSON.stringify(document(
+      [numeric("A"), numeric("B")],
+      [categorical("C"), categorical("D")],
+    )), "utf8");
+
+    const loaded = await loadPredictionArtifacts(root, NODE.id);
+
+    assert.deepEqual(loaded.prediction.criteria.map((item) => item.id), ["B"]);
+    assert.deepEqual(loaded.prediction.attributes.map((item) => item.id), ["D"]);
+    assert.deepEqual(loaded.base?.criteria.map((item) => item.id), ["A", "B"]);
+    assert.deepEqual(loaded.base?.attributes.map((item) => item.id), ["C", "D"]);
+    assert.equal(Object.hasOwn(loaded.base?.criteria[0] ?? {}, "observed_product_ids"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a Market prediction item without a legal observed_product_ids field", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-eval-artifacts-"));
+  try {
+    const directory = path.join(root, "market-criteria", NODE.id);
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "market.json"), JSON.stringify(document([numeric("missing-observation")])), "utf8");
+
+    await assert.rejects(
+      () => loadPredictionArtifacts(root, NODE.id),
+      /observed_product_ids is required/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -176,10 +235,46 @@ test("missing prediction item creates a missing FailureUnit", async () => {
 });
 
 test("extra prediction item creates an extra FailureUnit", async () => {
-  const { result } = await evaluate(document(), document([], [categorical("color")]));
+  const { result } = await evaluate(document(), document([], [{
+    ...categorical("color"),
+    observed_product_ids: ["p-extra"],
+  }]));
   assert.equal(result.failures.length, 1);
   assert.equal(result.failures[0].diff_type, "extra");
+  assert.equal(result.failures[0].pred_item?.id, "color");
   assert.equal(result.metrics.attribute_precision, 0);
+});
+
+test("unobserved Market items do not enter scoring or missing-extra comparison", async () => {
+  const gold = document([numeric("kept")], [categorical("kept-attribute")]);
+  const prediction = document(
+    [{ ...numeric("ignored"), observed_product_ids: [] }, { ...numeric("kept"), observed_product_ids: ["p1"] }],
+    [{ ...categorical("ignored-attribute"), observed_product_ids: [] }, { ...categorical("kept-attribute"), observed_product_ids: ["p1"] }],
+  );
+
+  const { result } = await evaluate(gold, prediction);
+
+  assert.deepEqual(result.pairings.map((pair) => pair.pred_ref), ["criteria:kept", "attribute:kept-attribute"]);
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.metrics.criteria_precision, 1);
+  assert.equal(result.metrics.criteria_recall, 1);
+  assert.equal(result.metrics.criteria_f1, 1);
+  assert.equal(result.metrics.attribute_precision, 1);
+  assert.equal(result.metrics.attribute_recall, 1);
+  assert.equal(result.metrics.attribute_f1, 1);
+});
+
+test("observed_product_ids are excluded from definition comparison", async () => {
+  const gold = document([numeric("runtime", "Runtime", ["ms"])]);
+  const prediction = document([{
+    ...numeric("runtime", "Runtime", ["ms"]),
+    observed_product_ids: ["p1", "p2"],
+  }]);
+
+  const { result } = await evaluate(gold, prediction);
+
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.metrics.matched_item_field_accuracy, 1);
 });
 
 test("same dimension in a different collection creates wrong_kind", async () => {
@@ -421,7 +516,7 @@ test("Langfuse telemetry emits Session Score and failure observation payloads wi
     caseId: "generic",
     sessionId: "real-session",
     gold: document([numeric("latency", "Latency", ["小时"]), numeric("missing")]),
-    prediction: document([numeric("response_time", "Latency", ["分钟"])]),
+    prediction: marketPrediction(document([numeric("response_time", "Latency", ["分钟"])])),
   }, noSemanticMatches, telemetry, definitionJudge);
 
   assert.equal(capturedScores.length, 1);
@@ -455,7 +550,7 @@ test("Langfuse telemetry emits Session Score and failure observation payloads wi
     caseId: "generic-exact",
     sessionId: "real-session",
     gold: exact,
-    prediction: structuredClone(exact),
+    prediction: marketPrediction(structuredClone(exact)),
   }, noSemanticMatches, telemetry, definitionJudge);
   assert.equal(calls(), 1);
   assert.equal(observations.filter((item) => item.name === "definition-judge").length, 1);

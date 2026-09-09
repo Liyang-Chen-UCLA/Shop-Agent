@@ -1,4 +1,5 @@
 import { createFailureUnits } from "./attribution.ts";
+import { filterObservedMarketItems } from "./loaders.ts";
 import { matchDocuments } from "./matching.ts";
 import { fieldDiffs, calculateMetrics } from "./metrics.ts";
 import type { DefinitionJudge, DefinitionResult, EvalResult, EvalTelemetry, EvaluationInput, SemanticMatcher } from "./types.ts";
@@ -9,21 +10,24 @@ export async function runEvaluation(
   telemetry: EvalTelemetry,
   definitionJudge?: DefinitionJudge,
 ): Promise<EvalResult> {
-  if (input.gold.node.id !== input.prediction.node.id) {
+  const prediction = filterObservedMarketItems(input.prediction);
+  const evaluationInput = { ...input, prediction };
+
+  if (evaluationInput.gold.node.id !== evaluationInput.prediction.node.id) {
     throw new Error(
-      `Taxonomy node mismatch: gold.node.id '${input.gold.node.id}' != prediction.node.id '${input.prediction.node.id}'.`,
+      `Taxonomy node mismatch: gold.node.id '${evaluationInput.gold.node.id}' != prediction.node.id '${evaluationInput.prediction.node.id}'.`,
     );
   }
-  if (input.base && input.base.node.id !== input.prediction.node.id) {
+  if (evaluationInput.base && evaluationInput.base.node.id !== evaluationInput.prediction.node.id) {
     throw new Error(
-      `Taxonomy node mismatch: base.node.id '${input.base.node.id}' != prediction.node.id '${input.prediction.node.id}'.`,
+      `Taxonomy node mismatch: base.node.id '${evaluationInput.base.node.id}' != prediction.node.id '${evaluationInput.prediction.node.id}'.`,
     );
   }
 
-  return telemetry.withBenchmark(input, async () => {
+  return telemetry.withBenchmark(evaluationInput, async () => {
     const matched = await matchDocuments(
-      input.gold,
-      input.prediction,
+      evaluationInput.gold,
+      evaluationInput.prediction,
       matcher,
       (semanticInput, run) => telemetry.observeSemanticMatch(semanticInput, run),
     );
@@ -45,20 +49,20 @@ export async function runEvaluation(
     const metrics = calculateMetrics(
       matched.pairings,
       definitionResults,
-      { criteria: input.gold.criteria.length, attribute: input.gold.attributes.length },
-      { criteria: input.prediction.criteria.length, attribute: input.prediction.attributes.length },
+      { criteria: evaluationInput.gold.criteria.length, attribute: evaluationInput.gold.attributes.length },
+      { criteria: evaluationInput.prediction.criteria.length, attribute: evaluationInput.prediction.attributes.length },
     );
     const failures = createFailureUnits(
       matched.pairings,
       matched.unmatchedGold,
       matched.unmatchedPred,
-      input.base,
+      evaluationInput.base,
       definitionResults,
     );
     const result: EvalResult = {
-      case_id: input.caseId,
-      session_id: input.sessionId,
-      node: input.gold.node,
+      case_id: evaluationInput.caseId,
+      session_id: evaluationInput.sessionId,
+      node: evaluationInput.gold.node,
       metrics,
       pairings: matched.pairings.map((pair) => ({
         gold_ref: pair.gold.ref,

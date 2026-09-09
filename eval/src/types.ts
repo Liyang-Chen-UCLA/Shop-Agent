@@ -19,11 +19,20 @@ export type CriteriaItem = {
   [key: string]: unknown;
 };
 
+export type MarketPredictionItem = CriteriaItem & {
+  observed_product_ids: string[];
+};
+
 export type CriteriaDocument = {
   node: TaxonomyNode;
   criteria: CriteriaItem[];
   attributes: CriteriaItem[];
   [key: string]: unknown;
+};
+
+export type MarketPredictionDocument = Omit<CriteriaDocument, "criteria" | "attributes"> & {
+  criteria: MarketPredictionItem[];
+  attributes: MarketPredictionItem[];
 };
 
 export type EvaluatedItem = {
