@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -115,7 +116,6 @@ export type BackendEnvTestTurn = {
 export type BackendEnvArtifactSummary = {
   node_id: string;
   marketPath: string;
-  productIds: string[];
 };
 
 export type BackendEnvTestResult = {
@@ -340,45 +340,32 @@ export async function verifyBackendEnvMarketArtifact(
   }
   const node = market.node as Record<string, unknown> | undefined;
   const expectedIds = samples.map((sample) => sample.item_id);
+  if (!isDeepStrictEqual(Object.keys(market).sort(), ["attributes", "criteria", "node"])) {
+    throw new Error(`Market artifact for ${scenario.id} must contain only node, criteria, and attributes.`);
+  }
   if (!node || node.id !== task.route.node_id || node.name !== task.route.node_name || !isDeepStrictEqual(node.path, routePath(task.route))) {
     throw new Error(`Market artifact node does not match the active route for ${scenario.id}.`);
-  }
-  if (market.dataset_category !== scenario.datasetCategory) {
-    throw new Error(`Market artifact category for ${scenario.id} is '${String(market.dataset_category)}', expected '${scenario.datasetCategory}'.`);
-  }
-  if (market.traversed_product_count !== config.maxDistinctProducts) {
-    throw new Error(`Market artifact for ${scenario.id} traversed ${String(market.traversed_product_count)} products; expected ${config.maxDistinctProducts}.`);
-  }
-  if (!Array.isArray(market.product_ids) || !isDeepStrictEqual(market.product_ids, expectedIds)) {
-    throw new Error(`Market artifact product_ids do not match the deterministic preflight for ${scenario.id}.`);
   }
   if (!Array.isArray(market.criteria) || !Array.isArray(market.attributes)) {
     throw new Error(`Market artifact for ${scenario.id} is missing criteria or attributes arrays.`);
   }
+  const expectedSet = new Set(expectedIds);
+  for (const [kind, items] of [["criteria", market.criteria], ["attributes", market.attributes]] as const) {
+    for (const [index, item] of items.entries()) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw new Error(`Market artifact ${kind}[${index}] is not an item object.`);
+      }
+      const observed = (item as Record<string, unknown>).observed_product_ids;
+      if (!Array.isArray(observed) || observed.some((id) => typeof id !== "string" || !expectedSet.has(id)) || new Set(observed).size !== observed.length) {
+        throw new Error(`Market artifact ${kind}[${index}] has invalid observed_product_ids.`);
+      }
+    }
+  }
   const productsDirectory = path.join(artifactDirectory, "products");
-  let entries: Array<{ name: string; isFile(): boolean }>;
-  try {
-    entries = await readdir(productsDirectory, { withFileTypes: true });
-  } catch (error) {
-    throw new Error(`Product artifact directory is missing or invalid for ${scenario.id}: ${productsDirectory} (${error instanceof Error ? error.message : String(error)})`);
+  if (existsSync(productsDirectory)) {
+    throw new Error(`Market artifact for ${scenario.id} must not create a products directory.`);
   }
-  const expectedFiles = new Set(expectedIds.map((itemId) => `${itemId}.json`));
-  if (entries.length !== expectedFiles.size || entries.some((entry) => !entry.isFile() || !expectedFiles.has(entry.name))) {
-    throw new Error(`Product artifact directory for ${scenario.id} must contain exactly the ${config.maxDistinctProducts} selected product JSON files.`);
-  }
-  for (const itemId of expectedIds) {
-    const productPath = path.join(productsDirectory, `${itemId}.json`);
-    let product: Record<string, unknown>;
-    try {
-      product = JSON.parse(await readFile(productPath, "utf8")) as Record<string, unknown>;
-    } catch (error) {
-      throw new Error(`Product artifact is missing or invalid for ${scenario.id}/${itemId}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-    if (!product || product.item_id !== itemId || product.dataset_category !== scenario.datasetCategory) {
-      throw new Error(`Product artifact does not match ${scenario.id}/${itemId}.`);
-    }
-  }
-  return { node_id: task.route.node_id, marketPath, productIds: expectedIds };
+  return { node_id: task.route.node_id, marketPath };
 }
 
 function validateFinalState(state: TaskState, scenarios: readonly BackendEnvScenario[], taskIds: readonly string[]): void {

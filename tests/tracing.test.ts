@@ -10,6 +10,7 @@ import { createModelRuntime } from "../src/framework/model-runtime.ts";
 import { createNativeAgentToolSet, EXTRACT_PRODUCT_TOOL } from "../src/framework/native-tools.ts";
 import { SubagentManager } from "../src/framework/subagents/manager.ts";
 import { createContractStateTools } from "../src/framework/contract-state.ts";
+import { createSemanticMatchTool } from "../src/framework/semantic-matcher.ts";
 import { createShopAgent } from "../src/framework/shop-agent.ts";
 import { createTracing, mapCost, mapUsage, sanitizeTracePayload, traceTools } from "../src/framework/tracing/index.ts";
 import type {
@@ -301,6 +302,55 @@ test("extract_product is one traced tool observation around its isolated model r
   assert.match(JSON.stringify(extractObservation?.attributes.output), /battery_life/);
 });
 
+test("semantic_match is a traced tool observation around the shared identity service", async () => {
+  const tracing = new RecordingTracing();
+  const runtime = createModelRuntime(tracing);
+  const itemSchema = {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      name: { type: "string" },
+      aliases: { type: "array", items: { type: "string" } },
+      type: { const: "categorical" },
+    },
+    required: ["id", "name", "aliases", "type"],
+    additionalProperties: false,
+  };
+  const state = createContractStateTools({
+    itemSchemas: { criterion: itemSchema, attribute: itemSchema },
+    runtimeItemSchema: {
+      type: "object",
+      properties: { observed_product_ids: { type: "array", items: { type: "string" } } },
+      required: ["observed_product_ids"],
+      additionalProperties: false,
+    },
+    runtimeMutableFields: ["aliases", "observed_product_ids"],
+  }, {
+    criteria: [{ id: "connection_mode", name: "连接类型", aliases: ["连接模式"], type: "categorical", observed_product_ids: [] }],
+    attributes: [],
+  });
+  const semantic = createSemanticMatchTool({
+    store: state.store,
+    runtime,
+    modelId: "hy3",
+    sessionId: "session-a",
+    getActiveProductId: () => "sku-a",
+  });
+  await tracing.withObservation("market-turn", "agent", {}, async () => {
+    await traceTools([semantic], tracing)[0].execute("semantic-call", {
+      kind: "criterion",
+      item: { id: "candidate", name: "连接模式", aliases: [], type: "categorical" },
+    });
+  }, "session-a");
+
+  const semanticObservation = tracing.records.find((record) => record.name === "semantic-match");
+  assert.ok(semanticObservation);
+  assert.equal(semanticObservation?.type, "tool");
+  assert.equal(semanticObservation?.parentSpanId, tracing.records[0]?.spanId);
+  assert.match(JSON.stringify(semanticObservation?.attributes.input), /candidate/);
+  assert.match(JSON.stringify(semanticObservation?.attributes.output), /connection_mode/);
+});
+
 test("model abort is distinct from an exporter or provider error", async () => {
   const tracing = new RecordingTracing();
   const runtime = createModelRuntime(tracing);
@@ -361,7 +411,11 @@ test("market cache hit records the real chain path without fake agents", async (
     const route = { node_id: "3375", node_name: "乒乓底板", node_path: "体育用品 > 乒乓球用品" };
     const artifact = path.join(directory, "market-criteria", route.node_id);
     await mkdir(artifact, { recursive: true });
-    await writeFile(path.join(artifact, "market.json"), JSON.stringify({ cached: true }), "utf8");
+    await writeFile(path.join(artifact, "market.json"), JSON.stringify({
+      node: { id: route.node_id, name: route.node_name, path: route.node_path.split(" > ") },
+      criteria: [],
+      attributes: [],
+    }), "utf8");
     await tracing.withObservation("shop-turn", "agent", {}, () => manager.run({ profile: research, task: JSON.stringify(route), sessionId: "session-a" }));
 
     assert.equal(tracing.records.filter((record) => record.name === "build-market-criteria" && record.type === "chain").length, 1);

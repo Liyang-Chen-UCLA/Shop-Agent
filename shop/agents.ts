@@ -1,5 +1,5 @@
 import type { AgentProfile } from "../src/framework/index.ts";
-import { attributeSchema, criterionSchema, marketOutputSchema, taxonomyNodeSchema } from "./schemas.ts";
+import { attributeSchema, criterionSchema, marketRuntimeItemSchema, taxonomyNodeSchema } from "./schemas.ts";
 
 export { criteriaOutputSchema, marketOutputSchema } from "./schemas.ts";
 
@@ -59,13 +59,20 @@ export const agents: AgentProfile[] = [
   {
     id: "market_agent",
     role: "subagent",
-    description: "Aligns the trusted base contract with selected Taobao OCR contexts and extracts every final criterion and attribute.",
+    description: "Maintains the canonical market contract while processing sampled Taobao OCR contexts one product at a time.",
     systemPrompt: { file: "./shop/prompts/market-agent.md" },
     skill: { file: "./shop/skills/market-alignment/SKILL.md" },
-    tools: ["load_base", "shopping_env", "web_search", "report_developer_issue"],
+    tools: ["shopping_env", "extract_product", "semantic_match", "get_state", "patch_state", "finalize_state", "web_search", "report_developer_issue"],
     webSearchPolicy: "market",
-    outputSchema: marketOutputSchema,
-    outputValidator: { id: "market_v1" },
+    contractState: {
+      itemSchemas: {
+        criterion: criterionSchema,
+        attribute: attributeSchema,
+      },
+      runtimeItemSchema: marketRuntimeItemSchema,
+      runtimeItemDefaults: { observed_product_ids: [] },
+      runtimeMutableFields: ["aliases", "observed_product_ids"],
+    },
     timeoutMs: 600_000,
     maxRetries: 0,
   },

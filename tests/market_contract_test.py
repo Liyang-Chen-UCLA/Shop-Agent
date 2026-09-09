@@ -46,15 +46,16 @@ def base_document():
     }
 
 
-def value(raw, normalized, evidence):
-    return {
-        "raw_value": raw,
-        "normalized_value": normalized,
-        "unit": "克",
-        "qualifier": None,
-        "evidence": evidence,
-        "ocr_page_id": "page-1",
+def market_document(weight=None, material=None, extra=None):
+    base = base_document()
+    value = {
+        "node": NODE,
+        "criteria": [{**base["criteria"][0], "observed_product_ids": weight if weight is not None else []}],
+        "attributes": [{**base["attributes"][0], "observed_product_ids": material if material is not None else []}],
     }
+    if extra:
+        value.update(extra)
+    return value
 
 
 class MarketContractTest(unittest.TestCase):
@@ -77,7 +78,6 @@ class MarketContractTest(unittest.TestCase):
             "sessionId": "session",
             "runId": "run",
             "maxDistinctProducts": 5,
-            "searchStats": {"succeeded": 0},
         }
         self.original_route = market.active_market_route
         self.original_shopping_route = shopping.active_market_route
@@ -89,11 +89,14 @@ class MarketContractTest(unittest.TestCase):
         shopping.active_market_route = self.original_shopping_route
         self.directory.cleanup()
 
+    def sample(self, count=5):
+        return [shopping.next_product(self.context)["item_id"] for _ in range(count)]
+
     def test_mapping_and_rank_item_order_reread_and_exhaustion(self):
         self.assertEqual(market.dataset_category_for_node("5598"), "儿童冲锋衣")
         self.assertEqual(market.dataset_category_for_node("5322"), "儿童冲锋衣")
         self.assertEqual(market.dataset_category_for_node("2394"), "手机直播补光灯")
-        selected = [shopping.next_product(self.context)["item_id"] for _ in range(5)]
+        selected = self.sample()
         self.assertEqual(selected, ["2", "3", "4", "5", "1"])
         self.assertEqual(shopping.reread_product(self.context, "2")["ocr_text"], "OCR-2")
         with self.assertRaisesRegex(ValueError, "sample_exhausted"):
@@ -103,75 +106,86 @@ class MarketContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "only an empty object"):
             shopping.shopping_env({"item_id": "2"}, self.context)
 
-    def _candidate(self, ids):
-        base = base_document()
-        products = []
-        for index, item_id in enumerate(ids):
-            products.append({
-                "dataset_category": "乒乓底板",
-                "item_id": item_id,
-                "criteria": [{
-                    "item_id": "weight",
-                    "status": "observed" if index < 3 else "not_mentioned",
-                    "values": [value(str(index), index, f"OCR-{item_id}")] if index < 3 else [],
-                }],
-                "attributes": [{
-                    "item_id": "material",
-                    "status": "not_mentioned",
-                    "values": [],
-                }],
-            })
-        return {
-            "node": NODE,
-            "dataset_category": "乒乓底板",
-            "traversed_product_count": self.context["maxDistinctProducts"],
-            "product_ids": ids,
-            "criteria": [dict(base["criteria"][0], observed_product_count=999, market_alignment="matched", web_evidence=[])],
-            "attributes": [dict(base["attributes"][0], observed_product_count=999, market_alignment="matched", web_evidence=[])],
-            "products": products,
-        }
-
-    def test_frequency_is_recomputed_and_files_publish_in_order(self):
-        base = base_document()
-        market.persist_base(base, self.context)
-        ids = ["2", "3", "4", "5", "1"]
-        self.assertEqual([shopping.next_product(self.context)["item_id"] for _ in range(5)], ids)
-        result = market.publish_market(self._candidate(ids), self.context)
-        self.assertEqual(result["criteria"][0]["observed_product_count"], 3)
-        self.assertEqual(result["attributes"][0]["observed_product_count"], 0)
+    def test_five_product_canonical_state_publishes_without_matrix_or_product_files(self):
+        market.persist_base(base_document(), self.context)
+        selected = self.sample()
+        value = base_document()
+        value["criteria"] = [
+            {
+                **value["criteria"][0],
+                "name": "重量范围",
+                "aliases": ["重量"],
+                "observed_product_ids": ["2", "3", "4"],
+            },
+            {
+                "id": "surface_type",
+                "name": "表面类型",
+                "description": "底板表面的类型",
+                "aliases": [],
+                "type": "categorical",
+                "values": ["黏性", "涩性"],
+                "value_domain": "open",
+                "direction": {"type": "preferred_set", "values": ["黏性"]},
+                "observed_product_ids": ["4"],
+            },
+        ]
+        value["attributes"][0]["observed_product_ids"] = []
+        result = market.publish_market(value, self.context)
+        self.assertEqual(set(result), {"node", "criteria", "attributes"})
+        self.assertEqual(result["criteria"][0]["observed_product_ids"], ["2", "3", "4"])
+        self.assertEqual(result["criteria"][1]["observed_product_ids"], ["4"])
+        self.assertEqual(result["attributes"][0]["observed_product_ids"], [])
+        self.assertEqual(selected, ["2", "3", "4", "5", "1"])
+        self.assertNotIn("dataset_category", result)
+        self.assertNotIn("products", result)
         artifact = Path(self.directory.name) / "market-criteria" / "3375"
         self.assertTrue((artifact / "market.json").is_file())
-        self.assertEqual(sorted(path.stem for path in (artifact / "products").glob("*.json")), sorted(ids))
-        self.assertEqual(json.loads((artifact / "products" / "2.json").read_text(encoding="utf-8"))["item_id"], "2")
+        self.assertFalse((artifact / "products").exists())
+        self.assertEqual(json.loads((artifact / "market.json").read_text(encoding="utf-8")), result)
 
-    def test_coverage_and_status_invariants_reject_invalid_output(self):
+    def test_runtime_ids_must_be_unique_and_sampled_and_invalid_publish_is_atomic(self):
         market.persist_base(base_document(), self.context)
-        ids = ["1", "2", "3", "4", "5"]
-        selected = [shopping.next_product(self.context)["item_id"] for _ in range(5)]
-        ids = selected
-        candidate = self._candidate(ids)
-        candidate["products"][0]["criteria"][0]["status"] = "unparsed"
-        candidate["products"][0]["criteria"][0]["values"][0]["normalized_value"] = 4
-        with self.assertRaisesRegex(ValueError, "normalized_value must be null"):
-            market.publish_market(candidate, self.context)
+        self.sample()
+        artifact = Path(self.directory.name) / "market-criteria" / "3375" / "market.json"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text('{"sentinel": true}\n', encoding="utf-8")
 
-    def test_hallucinated_ocr_evidence_is_rejected(self):
+        duplicate = market_document(weight=["2", "2"])
+        with self.assertRaisesRegex(ValueError, "must be unique"):
+            market.publish_market(duplicate, self.context)
+        self.assertEqual(json.loads(artifact.read_text(encoding="utf-8")), {"sentinel": True})
+
+        unknown = market_document(weight=["unknown"])
+        with self.assertRaisesRegex(ValueError, "not a valid product id|not sampled"):
+            market.publish_market(unknown, self.context)
+        self.assertEqual(json.loads(artifact.read_text(encoding="utf-8")), {"sentinel": True})
+
+        old_shape = market_document(extra={"products": []})
+        with self.assertRaisesRegex(ValueError, "exactly node, criteria, and attributes"):
+            market.publish_market(old_shape, self.context)
+        self.assertEqual(json.loads(artifact.read_text(encoding="utf-8")), {"sentinel": True})
+
+    def test_definition_validation_is_separate_from_runtime_metadata(self):
         market.persist_base(base_document(), self.context)
-        ids = [shopping.next_product(self.context)["item_id"] for _ in range(5)]
-        candidate = self._candidate(ids)
-        candidate["products"][0]["criteria"][0]["values"][0]["evidence"] = "hallucinated OCR"
-        with self.assertRaisesRegex(ValueError, "verbatim substring"):
-            market.publish_market(candidate, self.context)
+        self.sample()
+        invalid = market_document()
+        invalid["criteria"][0]["direction"] = {"type": "target_range", "unit": "小时"}
+        with self.assertRaisesRegex(ValueError, "market criteria/attribute definition rejected|target_range"):
+            market.publish_market(invalid, self.context)
+
+    def test_publish_requires_exact_configured_sample_count(self):
+        market.persist_base(base_document(), self.context)
+        self.sample(3)
+        with self.assertRaisesRegex(ValueError, "exactly 5 trusted samples"):
+            market.publish_market(market_document(), self.context)
 
     def test_publish_honors_configured_non_five_limit(self):
         self.context["maxDistinctProducts"] = 3
         market.persist_base(base_document(), self.context)
-        ids = [shopping.next_product(self.context)["item_id"] for _ in range(3)]
-        result = market.publish_market(self._candidate(ids), self.context)
-        self.assertEqual(result["traversed_product_count"], 3)
-        self.assertEqual(result["product_ids"], ids)
-        artifact = Path(self.directory.name) / "market-criteria" / "3375"
-        self.assertEqual(sorted(path.stem for path in (artifact / "products").glob("*.json")), sorted(ids))
+        selected = self.sample(3)
+        result = market.publish_market(market_document(weight=[selected[0]]), self.context)
+        self.assertEqual(result["criteria"][0]["observed_product_ids"], [selected[0]])
+        self.assertEqual(set(result), {"node", "criteria", "attributes"})
 
 
 if __name__ == "__main__":

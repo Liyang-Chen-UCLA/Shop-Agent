@@ -1,7 +1,12 @@
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { Type } from "@earendil-works/pi-ai";
+import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { messageText } from "./content.ts";
+import { validateJsonSchema } from "./schema.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { SemanticMatchCacheItem, TaxonomySemanticMatchCache } from "./semantic-match-cache.ts";
+import { ContractStateStore, type ContractItem, type ContractStateKind } from "./contract-state.ts";
+
+export const SEMANTIC_MATCH_TOOL = "semantic_match";
 
 export type SemanticItem = SemanticMatchCacheItem & {
   ref?: string;
@@ -23,6 +28,25 @@ export type SharedSemanticMatcherOptions = {
   sessionId?: string;
   thinking?: ThinkingLevel;
   cache?: Pick<TaxonomySemanticMatchCache, "lookup">;
+};
+
+export type SemanticMatchToolResult = {
+  candidate: ContractItem;
+  kind: ContractStateKind;
+  matched: boolean;
+  canonical_item_id?: string;
+  method?: SemanticMatchMethod;
+  active_product_id: string;
+};
+
+export type SemanticMatchToolOptions = {
+  store: ContractStateStore;
+  runtime: ModelRuntime;
+  modelId: string;
+  sessionId: string;
+  cache?: Pick<TaxonomySemanticMatchCache, "lookup" | "writeAccepted">;
+  getActiveProductId: () => string | undefined;
+  onResolved?: (result: SemanticMatchToolResult) => void | Promise<void>;
 };
 
 const SYSTEM_PROMPT = `You match evaluation dimensions for a shopping taxonomy benchmark.
@@ -275,6 +299,136 @@ export class SharedSemanticMatcher {
     }
     return validateModelPairings(parsePairings(parseJsonObject(messageText(response))), left, right) as SemanticMatchPair<Left, Right>[];
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function runtimeFieldNames(store: ContractStateStore): Set<string> {
+  const properties = store.config.runtimeItemSchema?.properties;
+  if (!isRecord(properties)) return new Set();
+  return new Set(Object.keys(properties));
+}
+
+function definitionOnly(item: ContractItem, runtimeFields: Set<string>): ContractItem {
+  return Object.fromEntries(Object.entries(item).filter(([key]) => !runtimeFields.has(key)));
+}
+
+function mergedAliases(values: readonly unknown[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    const normalized = normalizeSemanticLabel(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(value);
+  }
+  return result;
+}
+
+function semanticMatchInputSchema(store: ContractStateStore) {
+  return {
+    oneOf: ([("criterion" as const), ("attribute" as const)].map((kind) => ({
+      type: "object",
+      properties: {
+        kind: { const: kind },
+        item: kind === "criterion" ? store.config.itemSchemas.criterion : store.config.itemSchemas.attribute,
+      },
+      required: ["kind", "item"],
+      additionalProperties: false,
+    }))),
+  };
+}
+
+function textResult(value: SemanticMatchToolResult): { content: [{ type: "text"; text: string }]; details: Record<string, unknown> } {
+  return {
+    content: [{ type: "text", text: JSON.stringify(value) }],
+    details: { tool: SEMANTIC_MATCH_TOOL, ...value },
+  };
+}
+
+/**
+ * Create the Market-facing identity tool. The tool only changes trusted
+ * runtime metadata after an accepted identity match; definition changes stay
+ * on the complete-item patch path.
+ */
+export function createSemanticMatchTool(options: SemanticMatchToolOptions): AgentTool<any> {
+  const parameters = semanticMatchInputSchema(options.store);
+  const matcher = new SharedSemanticMatcher({
+    runtime: options.runtime,
+    modelId: options.modelId,
+    sessionId: options.sessionId,
+    thinking: "off",
+    cache: options.cache,
+  });
+  const runtimeFields = runtimeFieldNames(options.store);
+
+  return {
+    name: SEMANTIC_MATCH_TOOL,
+    label: SEMANTIC_MATCH_TOOL,
+    description: "Match one extracted candidate to the current canonical item identity. This never judges or changes the definition.",
+    parameters: Type.Unsafe(parameters),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const validation = validateJsonSchema(parameters, params);
+      if (!validation.valid) throw new Error(`semantic_match arguments do not match the input schema: ${validation.error}`);
+      if (!isRecord(params)) throw new Error("semantic_match arguments must be an object.");
+      const kind = params.kind as ContractStateKind;
+      const candidate = params.item as ContractItem;
+      const activeProductId = options.getActiveProductId();
+      if (!activeProductId) throw new Error("semantic_match requires a successfully extracted active product.");
+
+      const state = options.store.get();
+      const canonicalItems: SemanticItem[] = [
+        ...state.criteria.map((item) => ({ ...definitionOnly(item, runtimeFields), kind: "criterion", ref: `criterion:${String(item.id)}` })),
+        ...state.attributes.map((item) => ({ ...definitionOnly(item, runtimeFields), kind: "attribute", ref: `attribute:${String(item.id)}` })),
+      ];
+      const match = await matcher.matchOne(
+        { ...candidate, kind, ref: `${kind}:${String(candidate.id)}` },
+        canonicalItems,
+      );
+      if (!match) {
+        const result: SemanticMatchToolResult = {
+          candidate: { ...candidate },
+          kind,
+          matched: false,
+          active_product_id: activeProductId,
+        };
+        await options.onResolved?.(result);
+        return textResult(result);
+      }
+
+      const canonicalId = String(match.right.id);
+      options.store.updateRuntimeItem(canonicalId, (item) => {
+        const observed = Array.isArray(item.observed_product_ids)
+          ? item.observed_product_ids.filter((value): value is string => typeof value === "string")
+          : [];
+        return {
+          ...item,
+          aliases: mergedAliases([
+            item.name,
+            ...(Array.isArray(item.aliases) ? item.aliases : []),
+            candidate.name,
+            ...(Array.isArray(candidate.aliases) ? candidate.aliases : []),
+          ]),
+          observed_product_ids: [...new Set([...observed, activeProductId])],
+        };
+      });
+      await options.cache?.writeAccepted(candidate, match.right);
+      const result: SemanticMatchToolResult = {
+        candidate: { ...candidate },
+        kind,
+        matched: true,
+        canonical_item_id: canonicalId,
+        method: match.method,
+        active_product_id: activeProductId,
+      };
+      await options.onResolved?.(result);
+      return textResult(result);
+    },
+  };
 }
 
 export {

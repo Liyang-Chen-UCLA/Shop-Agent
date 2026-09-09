@@ -246,6 +246,57 @@ test("framework contract state upserts, overwrites, moves, removes, and finalize
   assert.deepEqual(stateTools.store.finalized(), { criteria: [], attributes: [] });
 });
 
+test("Market runtime metadata is initialized, preserved across upserts and kind moves, and cannot be patched by the model", async () => {
+  const config = {
+    itemSchemas: {
+      criterion: {
+        type: "object",
+        properties: { id: { type: "string" }, name: { type: "string" }, aliases: { type: "array", items: { type: "string" } } },
+        required: ["id", "name", "aliases"],
+        additionalProperties: false,
+      },
+      attribute: {
+        type: "object",
+        properties: { id: { type: "string" }, name: { type: "string" }, aliases: { type: "array", items: { type: "string" } } },
+        required: ["id", "name", "aliases"],
+        additionalProperties: false,
+      },
+    },
+    runtimeItemSchema: {
+      type: "object",
+      properties: { observed_product_ids: { type: "array", items: { type: "string" } } },
+      required: ["observed_product_ids"],
+      additionalProperties: false,
+    },
+    runtimeItemDefaults: { observed_product_ids: [] },
+    runtimeMutableFields: ["aliases", "observed_product_ids"],
+  };
+  let activeProduct = "p1";
+  const stateTools = createContractStateTools(config, undefined, {
+    runtime: {
+      onUpsert: (_kind, _item, existing) => ({
+        observed_product_ids: [...new Set([...(Array.isArray(existing?.observed_product_ids) ? existing.observed_product_ids as string[] : []), activeProduct])],
+      }),
+    },
+  });
+  const patch = stateTools.tools.find((tool) => tool.name === "patch_state")!;
+  const read = () => stateTools.store.get();
+
+  await patch.execute("create", { op: "upsert", kind: "criterion", item: { id: "A", name: "Alpha", aliases: [] } });
+  assert.deepEqual(read().criteria[0]?.observed_product_ids, ["p1"]);
+  activeProduct = "p2";
+  await patch.execute("overwrite", { op: "upsert", kind: "criterion", item: { id: "A", name: "Alpha updated", aliases: ["a"] } });
+  assert.deepEqual(read().criteria[0], { id: "A", name: "Alpha updated", aliases: ["a"], observed_product_ids: ["p1", "p2"] });
+  await patch.execute("move", { op: "upsert", kind: "attribute", item: { id: "A", name: "Alpha attribute", aliases: [] } });
+  assert.deepEqual(read(), { criteria: [], attributes: [{ id: "A", name: "Alpha attribute", aliases: [], observed_product_ids: ["p1", "p2"] }] });
+
+  await assert.rejects(
+    () => patch.execute("forged-runtime", { op: "upsert", kind: "attribute", item: { id: "B", name: "Beta", aliases: [], observed_product_ids: ["p3"] } }),
+    /patch_state arguments.*observed_product_ids|not allowed/,
+  );
+  assert.equal(read().attributes.length, 1);
+});
+
 test("finalize_state awaits publication and only finalizes after the hook succeeds", async () => {
   const config = {
     itemSchemas: {
@@ -322,24 +373,12 @@ test("submit_result propagates criteria_v1 rejection as a tool error", async () 
   assert.equal(terminal.state.submitted, false);
 });
 
-test("submit_result propagates market_v1 rejection as a tool error", async () => {
+test("stateful Market profiles use finalize_state instead of submit_result", async () => {
   const config = await loadConfig(cwd);
   const profile = config.agents.find((agent) => agent.id === "market_agent")!;
-  const terminal = createTerminalOutputTool(profile, { python: testPython })!;
-  const invalid = {
-    node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
-    dataset_category: "手机",
-    traversed_product_count: 5,
-    product_ids: [],
-    criteria: [],
-    attributes: [],
-    products: [],
-  };
-  await assert.rejects(
-    () => terminal.execute("submit-market-invalid", invalid),
-    /market_v1.*rejected|active route|trusted data directory/,
-  );
-  assert.equal(terminal.state.submitted, false);
+  assert.equal(createTerminalOutputTool(profile, { python: testPython }), undefined);
+  assert.ok(profile.contractState);
+  assert.deepEqual(profile.tools?.filter((tool) => ["get_state", "patch_state", "finalize_state"].includes(tool)), ["get_state", "patch_state", "finalize_state"]);
 });
 
 test("submit_result stores the trusted validator value", async () => {

@@ -6,6 +6,11 @@ import type { PythonExecutor } from "./python-executor.ts";
 import { validateJsonSchema } from "./schema.ts";
 import type { PythonToolDefinition, PythonToolRuntimeContext } from "./types.ts";
 
+export type PythonToolHooks = {
+  onBeforeTool?: (definition: PythonToolDefinition) => void | Promise<void>;
+  onToolResult?: (definition: PythonToolDefinition, result: unknown) => void | Promise<void>;
+};
+
 async function findManifests(directory: string): Promise<string[]> {
   try {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -60,6 +65,7 @@ export function createPythonAgentTools(
   allowlist: string[],
   executor: PythonExecutor,
   getRuntimeContext?: () => PythonToolRuntimeContext,
+  hooks?: PythonToolHooks,
 ): AgentTool<any>[] {
   return allowlist.filter((name) => name !== "delegate_agent").map((name) => {
     const definition = definitions.get(name);
@@ -71,9 +77,11 @@ export function createPythonAgentTools(
       parameters: Type.Unsafe(definition.inputSchema) as TSchema,
       executionMode: "sequential",
       async execute(toolCallId, params, signal) {
+        await hooks?.onBeforeTool?.(definition);
         const result = await executor.executeTool(definition, toolCallId, params, getRuntimeContext?.(), signal);
         const validation = validateJsonSchema(definition.outputSchema, result);
         if (!validation.valid) throw new Error(`Python tool '${definition.name}' output validation failed: ${validation.error}`);
+        await hooks?.onToolResult?.(definition, result);
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: { tool: definition.name } };
       },
     } satisfies AgentTool<any>;

@@ -43,6 +43,7 @@ export type ProductExtractorOptions = {
   runtime: ModelRuntime;
   projectRoot: string;
   modelId?: string;
+  onSuccess?: (input: ProductExtractionInput, output: ProductExtractionOutput) => void | Promise<void>;
 };
 
 type SubmissionState = {
@@ -184,6 +185,7 @@ export function createProductExtractorTool(options: ProductExtractorOptions): Ag
     async execute(_toolCallId, params, signal) {
       const input = validateProductExtractionInput(params);
       const output = await runIsolatedExtraction(input, options, signal);
+      await options.onSuccess?.(input, output);
       return {
         content: [{ type: "text", text: JSON.stringify(output) }],
         details: {

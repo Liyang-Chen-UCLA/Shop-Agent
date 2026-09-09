@@ -87,7 +87,7 @@ export class SubagentManager {
       if (options.profile.contractState) {
         const sessionId = options.sessionId ?? result.runId;
         const state = validateContractState(options.profile.contractState, result.value);
-        this.contractStates.set(sessionId, state);
+        this.contractStates.set(this.contractStateKey(sessionId, options.task), state);
       }
       return result;
     });
@@ -118,6 +118,9 @@ export class SubagentManager {
         if (!definition) throw new Error(`Subagent '${options.profile.id}' references unknown tool '${name}'.`);
         return definition;
       });
+    const contractState = options.profile.contractState
+      ? await this.initialContractState(options.profile, sessionId, options.task)
+      : undefined;
     const request: ChildRequest = {
       runId,
       sessionId,
@@ -130,9 +133,7 @@ export class SubagentManager {
       model: detail.model,
       thinking: detail.thinking,
       tools,
-      contractState: options.profile.contractState
-        ? (this.contractStates.get(sessionId) ?? emptyContractState())
-        : undefined,
+      contractState,
       trustedRoute: this.routeFromTask(options.task),
       attempt: 1,
       traceContext: this.tracing.context(sessionId),
@@ -205,6 +206,10 @@ export class SubagentManager {
       const text = await readFile(marketPath, "utf8");
       const value = JSON.parse(text) as unknown;
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("market artifact is not a JSON object");
+      const document = value as Record<string, unknown>;
+      if (Object.keys(document).sort().join(",") !== "attributes,criteria,node" || !Array.isArray(document.criteria) || !Array.isArray(document.attributes)) {
+        throw new Error("market artifact is not a canonical contract document");
+      }
       return { text: JSON.stringify(value), value, runId: `cached-${randomUUID()}` };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -273,6 +278,44 @@ export class SubagentManager {
     chain?.update({ output: result.value ?? result.text, metadata: { cache: "miss" } });
     return result;
     });
+  }
+
+  private async initialContractState(profile: ResolvedAgentProfile, sessionId: string, task: string): Promise<ContractState> {
+    const existing = this.contractStates.get(this.contractStateKey(sessionId, task));
+    if (existing) return existing;
+    if (profile.id !== "market_agent") return emptyContractState();
+    const route = this.routeFromTask(task);
+    if (!route) throw new Error("market_agent requires a trusted taxonomy route to initialize contract state.");
+    const basePath = path.join(this.artifactDirectory(), route.node_id, "base.json");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(basePath, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(`market_agent base criteria artifact is not available: ${basePath}`);
+      }
+      if (error instanceof SyntaxError) throw new Error(`Cached base criteria artifact is invalid: ${basePath}`);
+      throw error;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`Cached base criteria artifact is not an object: ${basePath}`);
+    }
+    const document = parsed as Record<string, unknown>;
+    if (Object.keys(document).sort().join(",") !== "attributes,criteria,node") {
+      throw new Error(`Cached base criteria artifact has an invalid shape: ${basePath}`);
+    }
+    if (!Array.isArray(document.criteria) || !Array.isArray(document.attributes)) {
+      throw new Error(`Cached base criteria artifact is missing criteria or attributes: ${basePath}`);
+    }
+    return {
+      criteria: document.criteria as ContractState["criteria"],
+      attributes: document.attributes as ContractState["attributes"],
+    };
+  }
+
+  private contractStateKey(sessionId: string, task: string): string {
+    const route = this.routeFromTask(task);
+    return `${sessionId}:${route?.node_id ?? "unrouted"}`;
   }
 
   private async runAttempt(
@@ -430,10 +473,15 @@ export class SubagentManager {
       }
       return python.executeTool(allowed, event.callId, event.arguments, event.context, signal);
     }
-    const contractStateFinalizer = request.profile.id === "research_agent"
-      && Boolean(request.profile.contractState)
+    const contractStateOperation = request.profile.id === "research_agent"
+      ? "persist_base"
+      : request.profile.id === "market_agent"
+        ? "publish_market"
+        : undefined;
+    const contractStateFinalizer = Boolean(request.profile.contractState)
       && event.validator === "market_v1"
-      && event.context?.operation === "persist_base";
+      && contractStateOperation !== undefined
+      && event.context?.operation === contractStateOperation;
     if (request.profile.outputValidator?.id !== event.validator && !contractStateFinalizer) {
       throw new Error(`Subagent '${request.profile.id}' is not allowed to call trusted validator '${event.validator}'.`);
     }
@@ -446,7 +494,7 @@ export class SubagentManager {
         datasetPath: request.datasetPath,
         maxDistinctProducts: request.maxDistinctProducts,
         agentName: request.profile.id,
-        operation: "persist_base",
+        operation: contractStateOperation,
       }
       : event.context;
     const result = await python.validate({ id: event.validator }, event.value, context, signal);

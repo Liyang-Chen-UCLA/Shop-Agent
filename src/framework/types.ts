@@ -8,6 +8,12 @@ export type ContractStateConfig = {
     criterion: JsonSchema;
     attribute: JsonSchema;
   };
+  /** Optional framework-owned fields present in persisted state items. */
+  runtimeItemSchema?: JsonSchema;
+  /** Defaults applied to state items before runtime metadata is validated. */
+  runtimeItemDefaults?: Record<string, unknown>;
+  /** Fields that a trusted runtime callback may update without changing definition. */
+  runtimeMutableFields?: string[];
 };
 
 export type ModelChoice = {

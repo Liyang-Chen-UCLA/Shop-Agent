@@ -1,10 +1,12 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createModelRuntime } from "../model-runtime.ts";
 import { createPythonAgentTools } from "../python-tools.ts";
-import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
+import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, SEMANTIC_MATCH_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
 import { messageText, sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { createTerminalOutputTool } from "../terminal-output.ts";
 import { createContractStateTools, type ContractState } from "../contract-state.ts";
+import { createSemanticMatchTool, type SemanticMatchToolResult } from "../semantic-matcher.ts";
+import { TaxonomySemanticMatchCache } from "../semantic-match-cache.ts";
 import { composeSystemPrompt } from "../system-prompt.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { createInterface } from "node:readline";
@@ -54,12 +56,54 @@ async function main(): Promise<void> {
     maxDistinctProducts: request.maxDistinctProducts,
     agentName: request.profile.id,
   });
-  const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, python, runtimeContext);
-  const nativeToolSet = createNativeAgentToolSet(allowlist, {
+  const productTransaction: {
+    sampledProductId?: string;
+    activeProductId?: string;
+    outstandingCandidateIds: Set<string>;
+    awaitingPatchCandidateId?: string;
+    complete: boolean;
+  } = {
+    outstandingCandidateIds: new Set(),
+    complete: true,
+  };
+  const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, python, runtimeContext, {
+    onBeforeTool: (definition) => {
+      if (definition.name !== "shopping_env") return;
+      if (productTransaction.sampledProductId && !productTransaction.complete) {
+        throw new Error("Complete the current product transaction with extract_product and semantic_match/patch_state before requesting another shopping_env sample.");
+      }
+    },
+    onToolResult: (definition, result) => {
+      if (definition.name !== "shopping_env") return;
+      if (!result || typeof result !== "object" || Array.isArray(result) || typeof (result as Record<string, unknown>).item_id !== "string") {
+        throw new Error("shopping_env returned no trusted active product id.");
+      }
+      productTransaction.sampledProductId = (result as Record<string, unknown>).item_id as string;
+      productTransaction.activeProductId = undefined;
+      productTransaction.outstandingCandidateIds = new Set();
+      productTransaction.awaitingPatchCandidateId = undefined;
+      productTransaction.complete = false;
+    },
+  });
+  const nativeToolSet = createNativeAgentToolSet(allowlist.filter((name) => name !== SEMANTIC_MATCH_TOOL), {
     runtime,
     projectRoot: request.projectRoot,
     getRuntimeContext: () => ({ sessionId: request.sessionId, agentName: request.profile.id, projectRoot: request.projectRoot }),
     webSearchPolicy: request.profile.webSearchPolicy ?? (request.profile.id === "market_agent" ? "market" : "criteria"),
+    onProductExtracted: async (input, output) => {
+      if (request.profile.id !== "market_agent") return;
+      if (!productTransaction.sampledProductId || input.item_id !== productTransaction.sampledProductId) {
+        throw new Error("extract_product must use the OCR item_id returned by the current shopping_env transaction.");
+      }
+      const candidateIds = [
+        ...output.criteria.map((entry) => entry.item.id),
+        ...output.attributes.map((entry) => entry.item.id),
+      ];
+      productTransaction.activeProductId = input.item_id;
+      productTransaction.outstandingCandidateIds = new Set(candidateIds);
+      productTransaction.awaitingPatchCandidateId = undefined;
+      productTransaction.complete = candidateIds.length === 0;
+    },
   });
   const terminalOutputTool = createTerminalOutputTool(request.profile, {
     python,
@@ -69,13 +113,16 @@ async function main(): Promise<void> {
       searchStats: nativeToolSet.searchStats,
     }),
   });
-  const publishResearchBase = request.profile.id === "research_agent" && request.profile.contractState
+  const publishContractState = request.profile.contractState
     ? async (state: ContractState) => {
-      if (!criteriaSearchSatisfied(nativeToolSet.searchStats)) {
+      if (request.profile.id === "research_agent" && !criteriaSearchSatisfied(nativeToolSet.searchStats)) {
         throw new Error("research_agent must complete its mandatory four-query web_search research before finalize_state.");
       }
+      if (request.profile.id === "market_agent" && productTransaction.sampledProductId && !productTransaction.complete) {
+        throw new Error("market_agent must finish the current product transaction before finalize_state.");
+      }
       const route = request.trustedRoute;
-      if (!route) throw new Error("finalize_state requires a trusted research route.");
+      if (!route) throw new Error("finalize_state requires a trusted route.");
       const document = {
         node: {
           id: route.node_id,
@@ -88,18 +135,64 @@ async function main(): Promise<void> {
       const validation = await python.validate(
         { id: "market_v1" },
         document,
-        { operation: "persist_base" },
+        { operation: request.profile.id === "market_agent" ? "publish_market" : "persist_base" },
       );
-      if (!validation.valid) throw new Error(`finalize_state base publication failed: ${validation.error}`);
+      if (!validation.valid) throw new Error(`finalize_state ${request.profile.id === "market_agent" ? "market" : "base"} publication failed: ${validation.error}`);
     }
     : undefined;
   const contractStateTools = request.profile.contractState
-    ? createContractStateTools(request.profile.contractState, request.contractState, { onFinalize: publishResearchBase })
+    ? createContractStateTools(request.profile.contractState, request.contractState, {
+      onFinalize: publishContractState,
+      runtime: request.profile.id === "market_agent"
+        ? {
+          onUpsert: (_kind, item, existing) => {
+            const activeProductId = productTransaction.activeProductId;
+            if (!activeProductId) throw new Error("market_agent patch_state requires a successfully extracted active product.");
+            const existingIds = existing && Array.isArray(existing.observed_product_ids)
+              ? existing.observed_product_ids.filter((value): value is string => typeof value === "string")
+              : [];
+            const next = [...new Set([...existingIds, activeProductId])];
+            if (productTransaction.awaitingPatchCandidateId) {
+              productTransaction.awaitingPatchCandidateId = undefined;
+              productTransaction.complete = productTransaction.outstandingCandidateIds.size === 0;
+            }
+            return { observed_product_ids: next };
+          },
+        }
+        : undefined,
+    })
+    : undefined;
+  const semanticMatchTool = request.profile.id === "market_agent"
+    && contractStateTools
+    && allowlist.includes(SEMANTIC_MATCH_TOOL)
+    ? createSemanticMatchTool({
+      store: contractStateTools.store,
+      runtime,
+      modelId: request.model,
+      sessionId: request.runId,
+      cache: request.trustedRoute
+        ? new TaxonomySemanticMatchCache({ runtimeData: request.dataDirectory, nodeId: request.trustedRoute.node_id, mode: "readWrite" })
+        : undefined,
+      getActiveProductId: () => productTransaction.activeProductId,
+      onResolved: async (result: SemanticMatchToolResult) => {
+        if (!productTransaction.outstandingCandidateIds.has(String(result.candidate.id))) {
+          throw new Error(`semantic_match candidate '${String(result.candidate.id)}' was not returned by the current extract_product call.`);
+        }
+        productTransaction.outstandingCandidateIds.delete(String(result.candidate.id));
+        if (result.matched) {
+          productTransaction.complete = productTransaction.outstandingCandidateIds.size === 0;
+        } else {
+          productTransaction.awaitingPatchCandidateId = String(result.candidate.id);
+          productTransaction.complete = false;
+        }
+      },
+    })
     : undefined;
   const tools = traceTools([
     ...pythonTools,
     ...nativeToolSet.tools,
     ...(contractStateTools?.tools ?? []),
+    ...(semanticMatchTool ? [semanticMatchTool] : []),
     ...(terminalOutputTool ? [terminalOutputTool] : []),
   ], tracing);
   agent = new Agent({

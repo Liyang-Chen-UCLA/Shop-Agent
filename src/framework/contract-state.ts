@@ -1,4 +1,5 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { isDeepStrictEqual } from "node:util";
 import { validateJsonSchema } from "./schema.ts";
 import type { ContractStateConfig, JsonSchema } from "./types.ts";
 
@@ -15,8 +16,16 @@ export type ContractState = {
 };
 
 export type ContractStateFinalizeHook = (state: ContractState) => void | Promise<void>;
+export type ContractStateUpsertRuntimeHook = (
+  kind: ContractStateKind,
+  item: ContractItem,
+  existing?: ContractItem,
+) => Record<string, unknown> | void;
 export type ContractStateToolOptions = {
   onFinalize?: ContractStateFinalizeHook;
+  runtime?: {
+    onUpsert?: ContractStateUpsertRuntimeHook;
+  };
 };
 
 type UpsertPatch = {
@@ -54,6 +63,91 @@ function schemaFor(config: ContractStateConfig, kind: ContractStateKind): JsonSc
   return kind === "criterion" ? config.itemSchemas.criterion : config.itemSchemas.attribute;
 }
 
+function runtimeProperties(config: ContractStateConfig): Record<string, JsonSchema> {
+  const properties = config.runtimeItemSchema?.properties;
+  if (!isRecord(properties)) return {};
+  return properties as Record<string, JsonSchema>;
+}
+
+function runtimeFieldNames(config: ContractStateConfig): Set<string> {
+  return new Set(Object.keys(runtimeProperties(config)));
+}
+
+function withRuntimeSchema(schema: JsonSchema, config: ContractStateConfig): JsonSchema {
+  const runtimeSchema = config.runtimeItemSchema;
+  if (!runtimeSchema) return schema;
+  if (Array.isArray(schema.anyOf)) {
+    return {
+      ...schema,
+      anyOf: schema.anyOf.map((candidate) => (
+        isRecord(candidate) ? withRuntimeSchema(candidate as JsonSchema, config) : candidate
+      )),
+    };
+  }
+  if (Array.isArray(schema.oneOf)) {
+    return {
+      ...schema,
+      oneOf: schema.oneOf.map((candidate) => (
+        isRecord(candidate) ? withRuntimeSchema(candidate as JsonSchema, config) : candidate
+      )),
+    };
+  }
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === "string") : [];
+  const runtimeRequired = Array.isArray(runtimeSchema.required)
+    ? runtimeSchema.required.filter((key): key is string => typeof key === "string")
+    : [];
+  return {
+    ...schema,
+    properties: { ...properties, ...runtimeProperties(config) },
+    required: [...new Set([...required, ...runtimeRequired])],
+  };
+}
+
+function stateSchemaFor(config: ContractStateConfig, kind: ContractStateKind): JsonSchema {
+  return withRuntimeSchema(schemaFor(config, kind), config);
+}
+
+function runtimeDefaults(config: ContractStateConfig): Record<string, unknown> {
+  return config.runtimeItemDefaults ? clone(config.runtimeItemDefaults) : {};
+}
+
+function addRuntimeDefaults(config: ContractStateConfig, state: ContractState): ContractState {
+  const defaults = runtimeDefaults(config);
+  if (!Object.keys(defaults).length) return clone(state);
+  return {
+    criteria: state.criteria.map((item) => ({ ...clone(defaults), ...clone(item) })),
+    attributes: state.attributes.map((item) => ({ ...clone(defaults), ...clone(item) })),
+  };
+}
+
+function runtimeMetadata(config: ContractStateConfig, item: ContractItem): Record<string, unknown> {
+  const fields = runtimeFieldNames(config);
+  return Object.fromEntries(Object.entries(item).filter(([key]) => fields.has(key)));
+}
+
+function validateRuntimeConfig(config: ContractStateConfig): void {
+  if (config.runtimeItemSchema !== undefined) {
+    if (!isRecord(config.runtimeItemSchema) || config.runtimeItemSchema.type !== "object" || !isRecord(config.runtimeItemSchema.properties)) {
+      throw new Error("contractState.runtimeItemSchema must be an object schema with properties.");
+    }
+    if (config.runtimeItemSchema.additionalProperties !== false) {
+      throw new Error("contractState.runtimeItemSchema must set additionalProperties to false.");
+    }
+    if (Array.isArray(config.runtimeItemSchema.required) && config.runtimeItemSchema.required.some((key) => typeof key !== "string")) {
+      throw new Error("contractState.runtimeItemSchema.required must contain strings.");
+    }
+  }
+  if (config.runtimeItemDefaults !== undefined && !isRecord(config.runtimeItemDefaults)) {
+    throw new Error("contractState.runtimeItemDefaults must be an object.");
+  }
+  if (config.runtimeMutableFields !== undefined && (
+    !Array.isArray(config.runtimeMutableFields) || config.runtimeMutableFields.some((field) => typeof field !== "string" || !field.trim())
+  )) {
+    throw new Error("contractState.runtimeMutableFields must contain non-empty strings.");
+  }
+}
+
 function itemId(item: ContractItem): string {
   if (typeof item.id !== "string") throw new Error("contract state items require a string id.");
   return item.id;
@@ -76,11 +170,22 @@ export function validateContractStateConfig(value: unknown): asserts value is Co
     const schema = value.itemSchemas[kind];
     if (!isRecord(schema)) throw new Error(`contractState.itemSchemas.${kind} must be a JSON schema object.`);
   }
+  validateRuntimeConfig(value as ContractStateConfig);
 }
 
-function validateItem(config: ContractStateConfig, kind: ContractStateKind, value: unknown, path: string): ContractItem {
+function validateItem(
+  config: ContractStateConfig,
+  kind: ContractStateKind,
+  value: unknown,
+  path: string,
+  includeRuntimeMetadata = false,
+): ContractItem {
   if (!isRecord(value)) throw new Error(`${path} must be an object.`);
-  const validation = validateJsonSchema(schemaFor(config, kind), value, path);
+  const validation = validateJsonSchema(
+    includeRuntimeMetadata ? stateSchemaFor(config, kind) : schemaFor(config, kind),
+    value,
+    path,
+  );
   if (!validation.valid) throw new Error(validation.error);
   itemId(value);
   return clone(value);
@@ -100,14 +205,14 @@ export function validateContractState(config: ContractStateConfig, value: unknow
 
   const ids = new Set<string>();
   const criteria = value.criteria.map((item, index) => {
-    const validated = validateItem(config, "criterion", item, `$.criteria[${index}]`);
+    const validated = validateItem(config, "criterion", item, `$.criteria[${index}]`, true);
     const id = itemId(validated);
     if (ids.has(id)) throw new Error(`contract state item id '${id}' is duplicated.`);
     ids.add(id);
     return validated;
   });
   const attributes = value.attributes.map((item, index) => {
-    const validated = validateItem(config, "attribute", item, `$.attributes[${index}]`);
+    const validated = validateItem(config, "attribute", item, `$.attributes[${index}]`, true);
     const id = itemId(validated);
     if (ids.has(id)) throw new Error(`contract state item id '${id}' is duplicated.`);
     ids.add(id);
@@ -154,6 +259,7 @@ export class ContractStateStore {
   private current: ContractState;
   private finalizedState?: ContractState;
   private readonly onFinalize?: ContractStateFinalizeHook;
+  private readonly onUpsert?: ContractStateUpsertRuntimeHook;
 
   constructor(
     config: ContractStateConfig,
@@ -163,8 +269,9 @@ export class ContractStateStore {
     validateContractStateConfig(config);
     this.config = config;
     this.patchSchema = patchSchema(config);
-    this.current = validateContractState(config, initialState);
+    this.current = validateContractState(config, addRuntimeDefaults(config, initialState));
     this.onFinalize = options.onFinalize;
+    this.onUpsert = options.runtime?.onUpsert;
   }
 
   get(): ContractState {
@@ -192,8 +299,22 @@ export class ContractStateStore {
     } else {
       const collection = collectionFor(patch.kind);
       const otherCollection = collection === "criteria" ? "attributes" : "criteria";
-      const item = validateItem(this.config, patch.kind, patch.item, `$.item`);
-      const id = itemId(item);
+      const definition = validateItem(this.config, patch.kind, patch.item, `$.item`);
+      const id = itemId(definition);
+      const existing = [...next.criteria, ...next.attributes].find((candidate) => itemId(candidate) === id);
+      const runtime = {
+        ...runtimeDefaults(this.config),
+        ...(existing ? runtimeMetadata(this.config, existing) : {}),
+      };
+      const updates = this.onUpsert?.(patch.kind, clone(definition), existing ? clone(existing) : undefined);
+      if (updates !== undefined) {
+        if (!isRecord(updates)) throw new Error("contract state runtime upsert metadata must be an object.");
+        const fields = runtimeFieldNames(this.config);
+        const invalid = Object.keys(updates).find((key) => !fields.has(key));
+        if (invalid) throw new Error(`contract state runtime upsert cannot modify definition field '${invalid}'.`);
+        Object.assign(runtime, clone(updates));
+      }
+      const item = { ...definition, ...runtime };
       const targetIndex = next[collection].findIndex((existing) => itemId(existing) === id);
       if (targetIndex >= 0) next[collection][targetIndex] = item;
       else {
@@ -202,6 +323,31 @@ export class ContractStateStore {
       }
     }
 
+    this.current = validateContractState(this.config, next);
+    return this.get();
+  }
+
+  /** Apply a trusted runtime-only mutation; LLM patch inputs never use this path. */
+  updateRuntimeItem(itemIdValue: string, updater: (item: ContractItem, kind: ContractStateKind) => ContractItem): ContractState {
+    if (this.isFinalized) throw new Error("contract state is already finalized.");
+    const locations: Array<{ collection: "criteria" | "attributes"; index: number; kind: ContractStateKind }> = [
+      ...this.current.criteria.map((_, index) => ({ collection: "criteria" as const, index, kind: "criterion" as const })),
+      ...this.current.attributes.map((_, index) => ({ collection: "attributes" as const, index, kind: "attribute" as const })),
+    ];
+    const location = locations.find(({ collection, index }) => itemId(this.current[collection][index]) === itemIdValue);
+    if (!location) throw new Error(`contract state item id '${itemIdValue}' was not found.`);
+    const before = clone(this.current[location.collection][location.index]);
+    const updated = updater(clone(before), location.kind);
+    if (!isRecord(updated)) throw new Error("contract state runtime update must return an object.");
+    const mutable = new Set(this.config.runtimeMutableFields ?? []);
+    const keys = new Set([...Object.keys(before), ...Object.keys(updated)]);
+    for (const key of keys) {
+      if (!mutable.has(key) && !isDeepStrictEqual(before[key], updated[key])) {
+        throw new Error(`contract state runtime update cannot modify definition field '${key}'.`);
+      }
+    }
+    const next = clone(this.current);
+    next[location.collection][location.index] = clone(updated);
     this.current = validateContractState(this.config, next);
     return this.get();
   }

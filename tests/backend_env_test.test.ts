@@ -88,25 +88,12 @@ async function writeMarketArtifact(
   selected: readonly BackendEnvSampleSummary[],
 ): Promise<void> {
   const directory = path.join(config.dataDirectory, "market-criteria", route.node_id);
-  const productsDirectory = path.join(directory, "products");
-  await mkdir(productsDirectory, { recursive: true });
-  const productIds = selected.map((sample) => sample.item_id);
+  await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, "market.json"), JSON.stringify({
     node: { id: route.node_id, name: route.node_name, path: route.node_path.split(">").map((part) => part.trim()) },
-    dataset_category: scenario.datasetCategory,
-    traversed_product_count: 5,
-    product_ids: productIds,
     criteria: [],
     attributes: [],
   }), "utf8");
-  for (const item_id of productIds) {
-    await writeFile(path.join(productsDirectory, `${item_id}.json`), JSON.stringify({
-      dataset_category: scenario.datasetCategory,
-      item_id,
-      criteria: [],
-      attributes: [],
-    }), "utf8");
-  }
 }
 
 async function fixture() {

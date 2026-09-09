@@ -179,90 +179,40 @@ const marketNodeSchema = {
   required: ["id", "name", "path"],
   additionalProperties: false,
 };
-const marketMetadataProperties = {
-  observed_product_count: { type: "integer" },
-  market_alignment: { type: "string", enum: ["matched", "corrected_from_conflict", "added_from_market"] },
-  web_evidence: {
-    type: "array",
-    items: { anyOf: [{ type: "string" }, { type: "object" }] },
-  },
-};
-const marketNumericCriterionSchema = {
-  ...numericCriterionSchema,
-  properties: { ...numericCriterionSchema.properties, ...marketMetadataProperties },
-  required: [...numericCriterionSchema.required, "observed_product_count", "market_alignment", "web_evidence"],
-};
-const marketBooleanCriterionSchema = {
-  ...booleanCriterionSchema,
-  properties: { ...booleanCriterionSchema.properties, ...marketMetadataProperties },
-  required: [...booleanCriterionSchema.required, "observed_product_count", "market_alignment", "web_evidence"],
-};
-const marketCategoricalCriterionSchema = {
-  ...categoricalCriterionSchema,
-  properties: { ...categoricalCriterionSchema.properties, ...marketMetadataProperties },
-  required: [...categoricalCriterionSchema.required, "observed_product_count", "market_alignment", "web_evidence"],
-};
-const marketNumericAttributeSchema = {
-  ...numericAttributeSchema,
-  properties: { ...numericAttributeSchema.properties, ...marketMetadataProperties },
-  required: [...numericAttributeSchema.required, "observed_product_count", "market_alignment", "web_evidence"],
-};
-const marketBooleanAttributeSchema = {
-  ...booleanAttributeSchema,
-  properties: { ...booleanAttributeSchema.properties, ...marketMetadataProperties },
-  required: [...booleanAttributeSchema.required, "observed_product_count", "market_alignment", "web_evidence"],
-};
-const marketCategoricalAttributeSchema = {
-  ...categoricalAttributeSchema,
-  properties: { ...categoricalAttributeSchema.properties, ...marketMetadataProperties },
-  required: [...categoricalAttributeSchema.required, "observed_product_count", "market_alignment", "web_evidence"],
-};
-const marketValueSchema = {
+
+/** Framework-owned Market metadata. LLM patch inputs deliberately use the
+ * base item schemas and never accept this field. */
+export const marketRuntimeItemSchema = {
   type: "object",
   properties: {
-    raw_value: { type: "string" },
-    normalized_value: { type: ["string", "number", "boolean", "null"] },
-    unit: { type: ["string", "null"] },
-    qualifier: { type: ["string", "null"] },
-    evidence: { type: ["string", "null"] },
-    ocr_page_id: { type: ["string", "null"] },
+    observed_product_ids: { type: "array", items: { type: "string" } },
   },
-  required: ["raw_value", "normalized_value"],
+  required: ["observed_product_ids"],
   additionalProperties: false,
 };
-const marketExtractionSchema = {
-  type: "object",
-  properties: {
-    item_id: { type: "string" },
-    status: { type: "string", enum: ["observed", "unparsed", "not_mentioned"] },
-    values: { type: "array", items: marketValueSchema },
-  },
-  required: ["item_id", "status", "values"],
-  additionalProperties: false,
-};
-const marketProductSchema = {
-  type: "object",
-  properties: {
-    dataset_category: { type: "string" },
-    item_id: { type: "string" },
-    criteria: { type: "array", items: marketExtractionSchema },
-    attributes: { type: "array", items: marketExtractionSchema },
-  },
-  required: ["dataset_category", "item_id", "criteria", "attributes"],
-  additionalProperties: false,
-};
+
+function marketItemSchema(itemSchema: Record<string, unknown>) {
+  return {
+    ...itemSchema,
+    properties: { ...(itemSchema.properties as Record<string, unknown>), ...marketRuntimeItemSchema.properties },
+    required: [...(itemSchema.required as string[]), "observed_product_ids"],
+  };
+}
+
+const marketNumericCriterionSchema = marketItemSchema(numericCriterionSchema);
+const marketBooleanCriterionSchema = marketItemSchema(booleanCriterionSchema);
+const marketCategoricalCriterionSchema = marketItemSchema(categoricalCriterionSchema);
+const marketNumericAttributeSchema = marketItemSchema(numericAttributeSchema);
+const marketBooleanAttributeSchema = marketItemSchema(booleanAttributeSchema);
+const marketCategoricalAttributeSchema = marketItemSchema(categoricalAttributeSchema);
 
 export const marketOutputSchema = {
   type: "object",
   properties: {
     node: marketNodeSchema,
-    dataset_category: { type: "string" },
-    traversed_product_count: { type: "integer" },
-    product_ids: { type: "array", items: { type: "string" } },
     criteria: { type: "array", items: { anyOf: [marketNumericCriterionSchema, marketBooleanCriterionSchema, marketCategoricalCriterionSchema] } },
     attributes: { type: "array", items: { anyOf: [marketNumericAttributeSchema, marketBooleanAttributeSchema, marketCategoricalAttributeSchema] } },
-    products: { type: "array", items: marketProductSchema },
   },
-  required: ["node", "dataset_category", "traversed_product_count", "product_ids", "criteria", "attributes", "products"],
+  required: ["node", "criteria", "attributes"],
   additionalProperties: false,
 };

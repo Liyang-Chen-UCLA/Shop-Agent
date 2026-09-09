@@ -5,8 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { ModelSemanticMatcher } from "../eval/src/semantic-matcher.ts";
 import type { ModelRuntime } from "../src/framework/model-runtime.ts";
-import { SharedSemanticMatcher, type SemanticItem } from "../src/framework/semantic-matcher.ts";
+import { createSemanticMatchTool, SharedSemanticMatcher, type SemanticItem } from "../src/framework/semantic-matcher.ts";
 import { TaxonomySemanticMatchCache } from "../src/framework/semantic-match-cache.ts";
+import { createContractStateTools } from "../src/framework/contract-state.ts";
 
 function item(id: string, name: string, aliases: string[] = []): SemanticItem {
   return { id, name, aliases, type: "categorical" };
@@ -160,6 +161,66 @@ test("Eval adapter reads semantic cache without writing it", async () => {
     assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), {
       entries: [{ terms: ["候选维度"], canonical_item_id: "canonical" }],
     });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Market semantic_match updates only trusted aliases and observed product metadata", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-semantic-tool-"));
+  try {
+    const itemSchema = {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        name: { type: "string" },
+        aliases: { type: "array", items: { type: "string" } },
+        type: { const: "categorical" },
+      },
+      required: ["id", "name", "aliases", "type"],
+      additionalProperties: false,
+    };
+    const stateTools = createContractStateTools({
+      itemSchemas: { criterion: itemSchema, attribute: itemSchema },
+      runtimeItemSchema: {
+        type: "object",
+        properties: { observed_product_ids: { type: "array", items: { type: "string" } } },
+        required: ["observed_product_ids"],
+        additionalProperties: false,
+      },
+      runtimeMutableFields: ["aliases", "observed_product_ids"],
+    }, {
+      criteria: [{ id: "connection_mode", name: "连接类型", aliases: [], type: "categorical", observed_product_ids: [] }],
+      attributes: [],
+    });
+    const cache = new TaxonomySemanticMatchCache({ runtimeData: root, nodeId: "301", mode: "readWrite" });
+    const { runtime, calls } = fakeRuntime(new Error("exact identity match must not call the model"));
+    const tool = createSemanticMatchTool({
+      store: stateTools.store,
+      runtime,
+      modelId: "matcher",
+      sessionId: "market-session",
+      cache,
+      getActiveProductId: () => "product-1",
+    });
+
+    const result = await tool.execute("match-1", {
+      kind: "criterion",
+      item: { id: "candidate", name: "连接模式", aliases: ["连接类型"], type: "categorical" },
+    });
+    assert.equal(calls(), 0);
+    assert.deepEqual(stateTools.store.get().criteria[0], {
+      id: "connection_mode",
+      name: "连接类型",
+      aliases: ["连接类型", "连接模式"],
+      type: "categorical",
+      observed_product_ids: ["product-1"],
+    });
+    assert.equal(JSON.parse((result.content[0] as { text: string }).text).canonical_item_id, "connection_mode");
+    assert.deepEqual((await cache.read()).entries, [{
+      terms: ["candidate", "连接模式", "连接类型"],
+      canonical_item_id: "connection_mode",
+    }]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -32,7 +32,7 @@ async function writeArtifact(directory: string, name: string, value: unknown): P
 test("reuses an existing market artifact without starting a child", async () => {
   const { directory, manager, research } = await setupManager();
   try {
-    const cached = { node: { id: route.node_id }, cached: true };
+    const cached = { node: { id: route.node_id, name: route.node_name, path: route.node_path.split(" > ") }, criteria: [], attributes: [] };
     await writeArtifact(directory, "market.json", cached);
     const childRuns: string[] = [];
     (manager as any).runSingle = async () => {
@@ -61,6 +61,42 @@ test("uses an existing base artifact and runs only the market profile", async ()
     const result = await manager.run({ profile: research, task, sessionId: "session" });
     assert.equal(result.value && (result.value as any).stage, "market");
     assert.deepEqual(childRuns, [{ profile: market.id, task }]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("initializes a Market contract state from the trusted base artifact", async () => {
+  const { directory, manager, market } = await setupManager();
+  try {
+    const base = {
+      node: { id: route.node_id, name: route.node_name, path: route.node_path.split(" > ") },
+      criteria: [{
+        id: "weight",
+        name: "重量",
+        description: "底板重量",
+        aliases: [],
+        type: "numeric",
+        units: ["克"],
+        direction: { type: "smaller_better" },
+      }],
+      attributes: [],
+    };
+    await writeArtifact(directory, "base.json", base);
+    (manager as any).toolDefinitions.set("shopping_env", { name: "shopping_env" });
+    let captured: any;
+    (manager as any).runAttempt = async (request: any) => {
+      captured = request;
+      return {
+        text: "market",
+        value: { criteria: [{ ...base.criteria[0], observed_product_ids: [] }], attributes: [] },
+        runId: request.runId,
+      };
+    };
+
+    await manager.run({ profile: market, task, sessionId: "market-session" });
+    assert.deepEqual(captured.contractState, { criteria: base.criteria, attributes: [] });
+    assert.deepEqual(captured.profile.contractState.runtimeItemDefaults, { observed_product_ids: [] });
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

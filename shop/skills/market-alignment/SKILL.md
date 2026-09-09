@@ -1,54 +1,34 @@
----
-name: market-alignment
-description: Align a category evaluation contract with the configured Taobao OCR sample and extract auditable criterion and attribute evidence.
----
-
 # Market alignment
 
-Use the trusted base contract as the starting namespace. Keep every base item,
-even when no selected OCR context mentions it. Mark each base item
-`matched` unless the OCR exposes a material conflict that is corrected with a
-stable id and completed web evidence (`corrected_from_conflict`). Add a new
-item only when OCR visibly exhibits it and a completed `web_search` defines
-it (`added_from_market`); never invent an OCR-absent item.
+Maintain one canonical framework state while processing the trusted sample.
+This skill is intentionally transactional: finish the current product before
+requesting the next one.
 
-Sample with `shopping_env({})` until its returned `sample_index` equals the
-trusted `sample_limit` (five in the configured profile); verify that each
-successful call advances the index by one and that tool errors are not counted.
-This tool accepts no arguments: every advancing call must be exactly
-`shopping_env({})`; never invent an argument, `null`, or an empty string, and
-retry a failed call with `{}`. Do not finalize with only four products. Copy the exact
-`dataset_category` returned by `shopping_env`—including the same value into
-the top-level document and every product entry. It is distinct from the
-taxonomy route `node.name`/`node_name`; never substitute a route name for it.
+## Product transaction
 
-For every selected product (the configured sample limit defaults to five) and
-every final criterion/attribute, emit exactly one extraction with status
-`observed`, `unparsed`, or `not_mentioned`.
-Observed entries may contain multiple values, and every observed or unparsed
-value must carry non-empty evidence copied verbatim from that product's OCR
-text. Unparsed entries retain raw OCR evidence and use null normalized values;
-not-mentioned entries have no values.
-If a new item is discovered late, append `not_mentioned` entries for it to
-earlier products. Frequencies count products with observed or unparsed status,
-not the number of values.
+1. Call `shopping_env({})` and keep its `item_id` and full `ocr_text`.
+2. Immediately call `extract_product` with that OCR. The extractor is isolated
+   from base state and previous products, so treat its candidates as fresh
+   definitions plus product evidence.
+3. For each returned criterion or attribute, call `semantic_match`.
+4. A matched candidate only updates trusted runtime identity metadata. An
+   unmatched, valid candidate may be submitted with one complete
+   `patch_state` upsert. The patch must not contain
+   `observed_product_ids`; the framework supplies it.
+5. Only use `patch_state remove` for an explicit bad, duplicate, or obsolete
+   item. Do not remove low-frequency or unmentioned dimensions.
 
-The object submitted through `submit_result` has exactly seven top-level keys:
-`node`, `dataset_category`, `traversed_product_count`, `product_ids`,
-`criteria`, `attributes`, and the raw `products` array. Never replace
-`products` with a summary. Each product
-object has exactly four required keys—`dataset_category`, `item_id`,
-`criteria`, and `attributes`—and both extraction arrays must be present, even
-when empty. Together they must cover every final criterion and attribute.
-Each extraction has exactly `item_id`, `status`, and `values`; each value may
-contain only `raw_value`, `normalized_value`, `unit`, `qualifier`, `evidence`,
-and `ocr_page_id`. Keep the nullable fields explicit when useful, and always
-copy non-empty verbatim OCR into `evidence` for observed/unparsed values.
+The framework merges aliases by normalized identity and retains all existing
+observed product ids when a definition is replaced or moves between kinds.
+Use `get_state` whenever the current definition is needed. Optional
+`web_search` is for resolving a real ambiguity, not a mandatory admission
+step.
 
-Every top-level criterion or attribute must retain its common/type-specific
-definition fields and the metadata `observed_product_count`,
-`market_alignment`, and `web_evidence`. Numeric items require `units` (and
-may have `formula`); categorical items require `values` and `value_domain`;
-criteria additionally require their contract `direction` object. Attributes
-must omit `direction` entirely. Do not add fields outside the configured
-schema.
+## Finalization
+
+Repeat the complete transaction until the trusted sample count is reached.
+Do not build a product-by-contract matrix or write product files. Do not
+create a not-mentioned row for a dimension absent from the isolated
+extraction. Keep zero-observation canonical items. Call `finalize_state({})`
+only after the current transaction is complete; it publishes the current
+canonical state as the market artifact.
