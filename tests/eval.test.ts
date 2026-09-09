@@ -3,11 +3,15 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { ModelDefinitionJudge } from "../eval/src/definition-judge.ts";
 import { loadEvalCase } from "../eval/src/loaders.ts";
+import { fieldDiffs } from "../eval/src/metrics.ts";
 import { runEvaluation } from "../eval/src/pipeline.ts";
 import { LangfuseEvalTelemetry } from "../eval/src/telemetry.ts";
+import type { ModelRuntime } from "../src/framework/model-runtime.ts";
 import type {
   CriteriaDocument,
+  DefinitionJudgeInput,
   EvalResult,
   EvalTelemetry,
   EvaluationInput,
@@ -74,6 +78,32 @@ class MockTelemetry implements EvalTelemetry {
 }
 
 const noSemanticMatches: SemanticMatcher = { async match() { return []; } };
+
+function definitionInput(gold: ReturnType<typeof numeric>, pred: ReturnType<typeof numeric>): DefinitionJudgeInput {
+  return {
+    gold: { ref: `criteria:${gold.id}`, kind: "criteria", item: gold },
+    pred: { ref: `criteria:${pred.id}`, kind: "criteria", item: pred },
+  };
+}
+
+function fakeDefinitionRuntime(response: string | Error): { runtime: ModelRuntime; calls: () => number; contexts: unknown[] } {
+  const state = { calls: 0, contexts: [] as unknown[] };
+  const runtime = {
+    getModel() { return { id: "definition-judge" }; },
+    ensureThinking() {},
+    streamSimple(_model: unknown, context: unknown) {
+      state.calls += 1;
+      state.contexts.push(context);
+      return {
+        result: async () => {
+          if (response instanceof Error) throw response;
+          return { stopReason: "stop", content: [{ type: "text", text: response }] };
+        },
+      };
+    },
+  } as unknown as ModelRuntime;
+  return { runtime, calls: () => state.calls, contexts: state.contexts };
+}
 
 async function evaluate(
   gold: CriteriaDocument,
@@ -181,6 +211,86 @@ test("semantic matcher is injectable and its one-to-one pairings are used", asyn
   assert.equal(telemetry.semanticInputs.length, 1);
   assert.equal(result.pairings[0].method, "semantic");
   assert.equal(result.metrics.criteria_f1, 1);
+});
+
+test("definition judge skips the LLM when rule fieldDiffs are empty", async () => {
+  const { runtime, calls } = fakeDefinitionRuntime(new Error("must not call"));
+  const judge = new ModelDefinitionJudge(runtime, "judge", "session-1");
+  const input = definitionInput(
+    numeric("latency", "Latency", ["hour"]),
+    numeric("response_time", "Latency", ["hour"]),
+  );
+
+  const result = await judge.judge(input);
+  assert.equal(calls(), 0);
+  assert.deepEqual(result, { rule_diffs: [], judgments: [] });
+});
+
+test("definition judge can mark 小时 and hour as semantically equivalent", async () => {
+  const { runtime, calls } = fakeDefinitionRuntime(JSON.stringify({ judgments: [
+    { field: "units", equivalent: true, reason: "小时 and hour are the same unit." },
+  ] }));
+  const judge = new ModelDefinitionJudge(runtime, "judge", "session-1");
+
+  const result = await judge.judge(definitionInput(
+    numeric("latency", "Latency", ["小时"]),
+    numeric("response_time", "Latency", ["hour"]),
+  ));
+  assert.equal(calls(), 1);
+  assert.deepEqual(result.rule_diffs.map((item) => item.field), ["units"]);
+  assert.deepEqual(result.judgments, [{
+    field: "units",
+    equivalent: true,
+    reason: "小时 and hour are the same unit.",
+  }]);
+});
+
+test("definition judge keeps 小时 and 分钟 semantically different", async () => {
+  const { runtime } = fakeDefinitionRuntime(JSON.stringify({ judgments: [
+    { field: "units", equivalent: false, reason: "小时 and 分钟 measure different durations." },
+  ] }));
+  const judge = new ModelDefinitionJudge(runtime, "judge", "session-1");
+
+  const result = await judge.judge(definitionInput(
+    numeric("latency", "Latency", ["小时"]),
+    numeric("response_time", "Latency", ["分钟"]),
+  ));
+  assert.equal(result.judgments[0]?.equivalent, false);
+});
+
+test("definition judge supports partial semantic overrides across multiple fields", async () => {
+  const { runtime } = fakeDefinitionRuntime(JSON.stringify({ judgments: [
+    { field: "units", equivalent: true, reason: "小时 and hour are equivalent." },
+    { field: "direction", equivalent: false, reason: "The optimization directions differ." },
+  ] }));
+  const judge = new ModelDefinitionJudge(runtime, "judge", "session-1");
+  const gold = numeric("latency", "Latency", ["小时"]);
+  const pred = { ...numeric("response_time", "Latency", ["hour"]), direction: { type: "larger_better" } };
+
+  const result = await judge.judge(definitionInput(gold, pred));
+  assert.deepEqual(result.rule_diffs.map((item) => item.field), ["direction", "units"]);
+  assert.deepEqual(result.judgments.map((item) => ({ field: item.field, equivalent: item.equivalent })), [
+    { field: "direction", equivalent: false },
+    { field: "units", equivalent: true },
+  ]);
+});
+
+test("definition judge fails closed and preserves rule diffs on LLM exception or malformed output", async () => {
+  const gold = numeric("latency", "Latency", ["小时"]);
+  const pred = numeric("response_time", "Latency", ["分钟"]);
+  const expectedDiffs = fieldDiffs({
+    gold: { ref: "criteria:latency", kind: "criteria", item: gold },
+    pred: { ref: "criteria:response_time", kind: "criteria", item: pred },
+    method: "id",
+  });
+
+  for (const response of [new Error("provider unavailable"), JSON.stringify({ judgments: [{ field: "units", equivalent: "yes" }] })]) {
+    const { runtime } = fakeDefinitionRuntime(response);
+    const judge = new ModelDefinitionJudge(runtime, "judge", "session-1");
+    const result = await judge.judge(definitionInput(gold, pred));
+    assert.deepEqual(result.rule_diffs, expectedDiffs);
+    assert.deepEqual(result.judgments.map((item) => item.equivalent), [false]);
+  }
 });
 
 test("missing and extra attribution is market-only with or without base", async () => {

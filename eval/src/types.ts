@@ -54,6 +54,26 @@ export interface SemanticMatcher {
   match(input: SemanticMatchInput): Promise<SemanticPairing[]>;
 }
 
+export type DefinitionJudgeInput = {
+  gold: EvaluatedItem;
+  pred: EvaluatedItem;
+};
+
+export type DefinitionFieldJudgment = {
+  field: FieldDiff["field"];
+  equivalent: boolean;
+  reason: string;
+};
+
+export type DefinitionResult = {
+  rule_diffs: FieldDiff[];
+  judgments: DefinitionFieldJudgment[];
+};
+
+export interface DefinitionJudge {
+  judge(input: DefinitionJudgeInput): Promise<DefinitionResult>;
+}
+
 export type SessionMetrics = {
   route_correctness: number;
   criteria_precision: number;
