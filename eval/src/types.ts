@@ -153,6 +153,11 @@ export interface SessionScoreWriter {
 export interface EvalTelemetry {
   withBenchmark(input: EvaluationInput, run: () => Promise<EvalResult>): Promise<EvalResult>;
   observeSemanticMatch<T>(input: SemanticMatchInput, run: () => Promise<T>): Promise<T>;
+  observeDefinitionJudge(
+    input: DefinitionJudgeInput,
+    ruleDiffs: readonly FieldDiff[],
+    run: () => Promise<DefinitionResult>,
+  ): Promise<DefinitionResult>;
   recordFailure(failure: FailureUnit): Promise<void>;
   writeSessionScores(result: EvalResult): Promise<void>;
   flush(): Promise<void>;

@@ -28,7 +28,16 @@ export async function runEvaluation(
       (semanticInput, run) => telemetry.observeSemanticMatch(semanticInput, run),
     );
     const definitionResults: DefinitionResult[] = definitionJudge
-      ? await Promise.all(matched.pairings.map((pair) => definitionJudge.judge({ gold: pair.gold, pred: pair.pred })))
+      ? await Promise.all(matched.pairings.map(async (pair) => {
+        const judgeInput = { gold: pair.gold, pred: pair.pred };
+        const ruleDiffs = fieldDiffs(pair);
+        if (!ruleDiffs.length) return definitionJudge.judge(judgeInput);
+        return telemetry.observeDefinitionJudge(
+          judgeInput,
+          ruleDiffs,
+          () => definitionJudge.judge(judgeInput),
+        );
+      }))
       : matched.pairings.map((pair) => {
         const ruleDiffs = fieldDiffs(pair);
         return { rule_diffs: ruleDiffs, final_diffs: ruleDiffs, judgments: [] };

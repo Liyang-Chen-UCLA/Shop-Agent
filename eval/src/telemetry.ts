@@ -5,7 +5,12 @@ import type {
   EvalResult,
   EvalTelemetry,
   EvaluationInput,
+  DefinitionJudgeInput,
+  DefinitionResult,
+  EvaluatedItem,
   FailureUnit,
+  FieldDiff,
+  ItemSnapshot,
   SemanticMatchInput,
   SessionScorePayload,
   SessionScoreWriter,
@@ -54,6 +59,10 @@ function semanticSnapshot(input: SemanticMatchInput): unknown {
   return { gold: input.gold.map(snapshot), pred: input.pred.map(snapshot) };
 }
 
+function definitionSnapshot(item: EvaluatedItem): ItemSnapshot {
+  return { ...item.item, kind: item.kind };
+}
+
 export class LangfuseEvalTelemetry implements EvalTelemetry {
   private readonly tracing: Tracing;
   private readonly scores: SessionScoreWriter;
@@ -95,6 +104,36 @@ export class LangfuseEvalTelemetry implements EvalTelemetry {
     }, async (observation) => {
       const result = await run();
       observation?.update({ output: result });
+      return result;
+    });
+  }
+
+  observeDefinitionJudge(
+    input: DefinitionJudgeInput,
+    ruleDiffs: readonly FieldDiff[],
+    run: () => Promise<DefinitionResult>,
+  ): Promise<DefinitionResult> {
+    if (!ruleDiffs.length) return run();
+    const goldItem = definitionSnapshot(input.gold);
+    const predItem = definitionSnapshot(input.pred);
+    return this.tracing.withObservation("definition-judge", "chain", {
+      input: {
+        gold_item: goldItem,
+        pred_item: predItem,
+        rule_diffs: [...ruleDiffs],
+      },
+      metadata: { fieldCount: ruleDiffs.length },
+    }, async (observation) => {
+      const result = await run();
+      observation?.update({
+        output: {
+          gold_item: goldItem,
+          pred_item: predItem,
+          rule_diffs: result.rule_diffs,
+          judgments: result.judgments,
+          final_diffs: result.final_diffs,
+        },
+      });
       return result;
     });
   }

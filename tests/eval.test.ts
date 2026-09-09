@@ -11,11 +11,13 @@ import { LangfuseEvalTelemetry } from "../eval/src/telemetry.ts";
 import type { ModelRuntime } from "../src/framework/model-runtime.ts";
 import type {
   CriteriaDocument,
+  DefinitionResult,
   DefinitionJudge,
   DefinitionJudgeInput,
   EvalResult,
   EvalTelemetry,
   EvaluationInput,
+  FieldDiff,
   FailureUnit,
   SemanticMatchInput,
   SemanticMatcher,
@@ -70,6 +72,9 @@ class MockTelemetry implements EvalTelemetry {
   }
   async observeSemanticMatch<T>(input: SemanticMatchInput, run: () => Promise<T>): Promise<T> {
     this.semanticInputs.push(input);
+    return run();
+  }
+  async observeDefinitionJudge(_input: DefinitionJudgeInput, _ruleDiffs: readonly FieldDiff[], run: () => Promise<DefinitionResult>): Promise<DefinitionResult> {
     return run();
   }
   async recordFailure(failure: FailureUnit): Promise<void> { this.failures.push(failure); }
@@ -408,12 +413,16 @@ test("Langfuse telemetry emits Session Score and failure observation payloads wi
     async close() {},
   };
   const telemetry = new LangfuseEvalTelemetry(tracing as any, writer);
+  const { runtime, calls } = fakeDefinitionRuntime(JSON.stringify({ judgments: [
+    { field: "units", equivalent: false, reason: "小时 and 分钟 are different units." },
+  ] }));
+  const definitionJudge = new ModelDefinitionJudge(runtime, "judge", "real-session");
   const result = await runEvaluation({
     caseId: "generic",
     sessionId: "real-session",
-    gold: document([numeric("latency")]),
-    prediction: document(),
-  }, noSemanticMatches, telemetry);
+    gold: document([numeric("latency", "Latency", ["小时"]), numeric("missing")]),
+    prediction: document([numeric("response_time", "Latency", ["分钟"])]),
+  }, noSemanticMatches, telemetry, definitionJudge);
 
   assert.equal(capturedScores.length, 1);
   assert.equal(capturedScores[0].length, 8);
@@ -426,4 +435,28 @@ test("Langfuse telemetry emits Session Score and failure observation payloads wi
   const failure = observations.find((item) => item.name === "failure-unit");
   assert.equal(failure?.attributes.output.diff_type, "missing");
   assert.ok(Object.hasOwn(failure?.attributes.output ?? {}, "repair_target"));
+
+  assert.equal(calls(), 1);
+  const definitionObservation = observations.find((item) => item.name === "definition-judge");
+  assert.deepEqual(definitionObservation?.attributes.input.rule_diffs.map((item: FieldDiff) => item.field), ["units"]);
+  const definitionOutput = definitionObservation?.attributes.updates.find((item: any) => item.output)?.output;
+  assert.deepEqual(Object.keys(definitionOutput ?? {}).sort(), [
+    "final_diffs",
+    "gold_item",
+    "judgments",
+    "pred_item",
+    "rule_diffs",
+  ]);
+  assert.equal(definitionOutput?.judgments[0]?.reason, "小时 and 分钟 are different units.");
+  assert.doesNotMatch(JSON.stringify(result.failures), /小时 and 分钟 are different units/);
+
+  const exact = document([numeric("exact", "Exact", ["hour"])]);
+  await runEvaluation({
+    caseId: "generic-exact",
+    sessionId: "real-session",
+    gold: exact,
+    prediction: structuredClone(exact),
+  }, noSemanticMatches, telemetry, definitionJudge);
+  assert.equal(calls(), 1);
+  assert.equal(observations.filter((item) => item.name === "definition-judge").length, 1);
 });
