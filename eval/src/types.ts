@@ -91,7 +91,7 @@ export type RootCause = "route_error" | "criteria_error" | "market_error" | "unr
 export type EarliestDivergence = "route" | "criteria" | "market" | "unresolved";
 export type RepairTarget =
   | "route prompt / taxonomy tools"
-  | "criteria-agent prompt / research policy"
+  | "research-agent prompt / research policy"
   | "market-agent prompt / market-alignment skill"
   | null;
 

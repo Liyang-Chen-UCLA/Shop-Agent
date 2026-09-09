@@ -70,7 +70,7 @@ export class SubagentManager {
   }
 
   async run(options: RunOptions): Promise<RunResult> {
-    if (options.profile.id === "criteria_agent") {
+    if (options.profile.id === "research_agent") {
       return this.runCriteriaAndMarket(options);
     }
     return this.runSingle(options);
@@ -218,7 +218,7 @@ export class SubagentManager {
   }
 
   private async persistBaseCriteria(result: RunResult, sessionId: string, runId: string): Promise<void> {
-    if (result.value === undefined) throw new Error("criteria_agent returned no structured result to persist as base criteria");
+    if (result.value === undefined) throw new Error("research_agent returned no structured result to persist as base criteria");
     const validation = await validateWithTrustedValidator(
       { id: "market_v1" },
       result.value,
@@ -231,7 +231,7 @@ export class SubagentManager {
         dataDirectory: this.config.dataDirectory,
         datasetPath: this.config.datasetPath,
         maxDistinctProducts: this.config.maxDistinctProducts,
-        agentName: "criteria_agent",
+        agentName: "research_agent",
       },
     );
     if (!validation.valid) throw new Error(`Base criteria persistence failed: ${validation.error}`);

@@ -1,6 +1,6 @@
 """Authoritative Pydantic contract for transient category criteria results.
 
-This module deliberately owns the semantic rules for criteria-agent output.  The
+This module deliberately owns the semantic rules for research-agent output.  The
 TypeScript profile schema is only an inexpensive first-pass guard; callers that
 need a trusted result should call :func:`validate_criteria_document` (or use the
 small JSON-line protocol exposed by this file).

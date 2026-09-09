@@ -32,7 +32,7 @@ test("loads project config and OpenCode Go model catalog", async () => {
     "taxonomy_get_children",
     "report_developer_issue",
   ]);
-  assert.equal(config.agents.find((agent) => agent.id === "criteria_agent")?.outputValidator?.id, "criteria_v1");
+  assert.equal(config.agents.find((agent) => agent.id === "research_agent")?.outputValidator?.id, "criteria_v1");
   assert.match(config.agents[0].systemPrompt, /orchestrator/i);
 
   const runtime = createModelRuntime();
@@ -212,7 +212,7 @@ test("submit_result returns a tool error for schema-invalid arguments", async ()
 
 test("submit_result propagates criteria_v1 rejection as a tool error", async () => {
   const config = await loadConfig(cwd);
-  const profile = config.agents.find((agent) => agent.id === "criteria_agent")!;
+  const profile = config.agents.find((agent) => agent.id === "research_agent")!;
   const terminal = createTerminalOutputTool(profile, { python: testPython })!;
   const invalid = {
     node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
@@ -256,7 +256,7 @@ test("submit_result propagates market_v1 rejection as a tool error", async () =>
 
 test("submit_result stores the trusted validator value", async () => {
   const config = await loadConfig(cwd);
-  const profile = config.agents.find((agent) => agent.id === "criteria_agent")!;
+  const profile = config.agents.find((agent) => agent.id === "research_agent")!;
   const terminal = createTerminalOutputTool(profile, { python: testPython })!;
   const value = {
     node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
@@ -525,7 +525,7 @@ test("creates an interactive orchestrator with state tools and focused subagents
     ]);
     const result = await app.agent.state.tools[4].execute("list-call", { action: "list" });
     const agents = JSON.parse((result.content[0] as { text: string }).text) as { id: string }[];
-    assert.deepEqual(agents.map((agent) => agent.id), ["route_agent", "criteria_agent", "delegate"]);
+    assert.deepEqual(agents.map((agent) => agent.id), ["route_agent", "research_agent", "delegate"]);
 
     const state = await app.getTaskState();
     assert.deepEqual(state.tasks, []);

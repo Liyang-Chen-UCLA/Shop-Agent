@@ -20,7 +20,7 @@ function snapshot(value: EvaluatedItem | undefined): FailureUnit["gold_item"] {
 function repairTarget(rootCause: RootCause): RepairTarget {
   switch (rootCause) {
     case "route_error": return "route prompt / taxonomy tools";
-    case "criteria_error": return "criteria-agent prompt / research policy";
+    case "criteria_error": return "research-agent prompt / research policy";
     case "market_error": return "market-agent prompt / market-alignment skill";
     case "unresolved": return null;
   }

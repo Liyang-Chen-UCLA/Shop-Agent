@@ -19,8 +19,8 @@ async function setupManager() {
   const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-market-"));
   const config = await loadConfig(cwd, undefined, { paths: { runtimeData: directory } });
   const manager = new SubagentManager(config, new Map());
-  const criteria = config.agents.find((profile) => profile.id === "criteria_agent")!;
-  return { directory, config, manager, criteria, market: config.agents.find((profile) => profile.id === "market_agent")! };
+  const research = config.agents.find((profile) => profile.id === "research_agent")!;
+  return { directory, config, manager, research, market: config.agents.find((profile) => profile.id === "market_agent")! };
 }
 
 async function writeArtifact(directory: string, name: string, value: unknown): Promise<void> {
@@ -30,7 +30,7 @@ async function writeArtifact(directory: string, name: string, value: unknown): P
 }
 
 test("reuses an existing market artifact without starting a child", async () => {
-  const { directory, manager, criteria } = await setupManager();
+  const { directory, manager, research } = await setupManager();
   try {
     const cached = { node: { id: route.node_id }, cached: true };
     await writeArtifact(directory, "market.json", cached);
@@ -40,7 +40,7 @@ test("reuses an existing market artifact without starting a child", async () => 
       throw new Error("child should not run for a cached market");
     };
 
-    const result = await manager.run({ profile: criteria, task, sessionId: "session" });
+    const result = await manager.run({ profile: research, task, sessionId: "session" });
     assert.deepEqual(result.value, cached);
     assert.deepEqual(childRuns, []);
   } finally {
@@ -49,7 +49,7 @@ test("reuses an existing market artifact without starting a child", async () => 
 });
 
 test("uses an existing base artifact and runs only the market profile", async () => {
-  const { directory, manager, criteria, market } = await setupManager();
+  const { directory, manager, research, market } = await setupManager();
   try {
     await writeArtifact(directory, "base.json", { node: route.node_id });
     const childRuns: Array<{ profile: string; task: string }> = [];
@@ -58,7 +58,7 @@ test("uses an existing base artifact and runs only the market profile", async ()
       return { text: "market", value: { stage: "market" }, runId: "market-run" };
     };
 
-    const result = await manager.run({ profile: criteria, task, sessionId: "session" });
+    const result = await manager.run({ profile: research, task, sessionId: "session" });
     assert.equal(result.value && (result.value as any).stage, "market");
     assert.deepEqual(childRuns, [{ profile: market.id, task }]);
   } finally {
@@ -66,8 +66,8 @@ test("uses an existing base artifact and runs only the market profile", async ()
   }
 });
 
-test("runs criteria, persists base, then runs market when neither artifact exists", async () => {
-  const { directory, manager, criteria, market } = await setupManager();
+test("runs research, persists base, then runs market when neither artifact exists", async () => {
+  const { directory, manager, research, market } = await setupManager();
   try {
     const calls: string[] = [];
     const childTasks: string[] = [];
@@ -80,9 +80,9 @@ test("runs criteria, persists base, then runs market when neither artifact exist
       calls.push("persist_base");
     };
 
-    const result = await manager.run({ profile: criteria, task, sessionId: "session" });
+    const result = await manager.run({ profile: research, task, sessionId: "session" });
     assert.equal(result.value && (result.value as any).stage, market.id);
-    assert.deepEqual(calls, [criteria.id, "persist_base", market.id]);
+    assert.deepEqual(calls, [research.id, "persist_base", market.id]);
     assert.deepEqual(childTasks, [task, task]);
   } finally {
     await rm(directory, { recursive: true, force: true });

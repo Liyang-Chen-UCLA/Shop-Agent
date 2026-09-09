@@ -229,10 +229,10 @@ export const agents: AgentProfile[] = [
     maxRetries: 1,
   },
   {
-    id: "criteria_agent",
+    id: "research_agent",
     role: "subagent",
     description: "Constructs transient category-level evaluation standards and distinguishing attributes from confirmed taxonomy facts.",
-    systemPrompt: { file: "./shop/prompts/criteria-agent.md" },
+    systemPrompt: { file: "./shop/prompts/research-agent.md" },
     tools: ["web_search", "report_developer_issue"],
     outputSchema: criteriaOutputSchema,
     outputValidator: { id: "criteria_v1" },

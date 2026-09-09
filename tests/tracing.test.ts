@@ -258,12 +258,12 @@ test("market cache hit records the real chain path without fake agents", async (
     const config = await loadConfig(root, undefined, { paths: { runtimeData: directory } });
     const tracing = new RecordingTracing();
     const manager = new SubagentManager(config, new Map(), undefined, tracing);
-    const criteria = config.agents.find((item) => item.id === "criteria_agent")!;
+    const research = config.agents.find((item) => item.id === "research_agent")!;
     const route = { node_id: "3375", node_name: "乒乓底板", node_path: "体育用品 > 乒乓球用品" };
     const artifact = path.join(directory, "market-criteria", route.node_id);
     await mkdir(artifact, { recursive: true });
     await writeFile(path.join(artifact, "market.json"), JSON.stringify({ cached: true }), "utf8");
-    await tracing.withObservation("shop-turn", "agent", {}, () => manager.run({ profile: criteria, task: JSON.stringify(route), sessionId: "session-a" }));
+    await tracing.withObservation("shop-turn", "agent", {}, () => manager.run({ profile: research, task: JSON.stringify(route), sessionId: "session-a" }));
 
     assert.equal(tracing.records.filter((record) => record.name === "build-market-criteria" && record.type === "chain").length, 1);
     assert.equal(tracing.records.filter((record) => record.name === "check-market-cache").length, 1);

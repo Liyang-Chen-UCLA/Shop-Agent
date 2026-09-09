@@ -49,13 +49,13 @@ The orchestrator sees only the `delegate_agent` framework tool by default. It ca
 Each run starts `src/framework/subagents/child-runner.ts` in an independent Node process. The child receives a fresh task rather than the parent transcript, loads only its profile allowlist, streams JSON Lines events to the parent, and stores its full transcript under `.shop-agent/runs/`. Subagents cannot delegate again and never start Python. Python requests travel to `SubagentManager`, which rechecks the child profile permission before forwarding them to the shared worker.
 
 Native tools are resolved through the same explicit profile allowlists as Python
-tools. `web_search` is available to `criteria_agent` and `market_agent`; it
+tools. `web_search` is available to `research_agent` and `market_agent`; it
 runs one isolated OpenCode/pi model request per query with the fixed
 `hy3` model with thinking disabled and returns research text
 only. Criteria keeps its required four-query plus one-follow-up cap; market has
 no numeric cap and is instructed to search only for conflicts or OCR-new
 definitions. `report_developer_issue` is explicitly allowlisted for the
-orchestrator, route agent, criteria agent, and market agent; it appends bounded
+orchestrator, route agent, research agent, and market agent; it appends bounded
 records with framework-injected session/agent metadata to
 `.shop-agent/developer-feedback/issues.jsonl`.
 
@@ -77,8 +77,8 @@ user request
   → route_agent queries a small taxonomy frontier through Python tools
   → user resolves cross-category, ambiguous, or direct-child choices
   → orchestrator upserts one canonical category task
-  → criteria_agent researches the confirmed route and constructs base criteria/attributes
-  → criteria_agent calls submit_result
+  → research_agent researches the confirmed route and constructs base criteria/attributes
+  → research_agent calls submit_result
   → output schema validation → criteria_v1 → persist base criteria
   → market_agent loads base, samples the configured number of mapped-category products (default five), aligns and extracts
   → market_agent calls submit_result

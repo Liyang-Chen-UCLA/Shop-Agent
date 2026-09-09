@@ -24,7 +24,7 @@ export function createDelegationTool(
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, onUpdate) {
       if (params.action === "list") {
-        // market_agent is an internal second stage of criteria_agent.  It is
+        // market_agent is an internal second stage of research_agent.  It is
         // configured and inspectable by the trusted framework, but not a
         // separate orchestrator choice; exposing it here would let a model
         // bypass the criteria -> market cache/persistence chain.

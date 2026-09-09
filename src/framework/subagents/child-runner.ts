@@ -116,9 +116,9 @@ async function main(): Promise<void> {
   if (!request.profile.outputSchema) text = finalMessage ? messageText(finalMessage) : "";
   if (!text && agent.state.errorMessage) throw new Error(agent.state.errorMessage);
 
-  if (request.profile.id === "criteria_agent") {
+  if (request.profile.id === "research_agent") {
     if (!criteriaSearchSatisfied(nativeToolSet.searchStats)) {
-      throw new Error("criteria_agent could not complete its mandatory four-query web_search research.");
+      throw new Error("research_agent could not complete its mandatory four-query web_search research.");
     }
     if (nativeToolSet.searchStats.failed > 0) {
       try {
@@ -128,7 +128,7 @@ async function main(): Promise<void> {
           projectRoot: request.projectRoot,
         }, {
           category: "insufficient_information",
-          summary: "部分标准研究检索失败，已要求 criteria_agent 采用保守结果",
+          summary: "部分标准研究检索失败，已要求 research_agent 采用保守结果",
           context: `web_search succeeded=${nativeToolSet.searchStats.succeeded}, failed=${nativeToolSet.searchStats.failed}`,
           affected_entities: [request.profile.id],
           evidence: nativeToolSet.searchStats.failures,
