@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "../src/framework/config.ts";
 import { createModelRuntime } from "../src/framework/model-runtime.ts";
+import { createNativeAgentToolSet, EXTRACT_PRODUCT_TOOL } from "../src/framework/native-tools.ts";
 import { SubagentManager } from "../src/framework/subagents/manager.ts";
 import { createContractStateTools } from "../src/framework/contract-state.ts";
 import { createShopAgent } from "../src/framework/shop-agent.ts";
@@ -226,6 +227,78 @@ test("contract state mutations are ordinary traced tool observations", async () 
   assert.equal(patchObservation?.parentSpanId, tracing.records[0]?.spanId);
   assert.match(JSON.stringify(patchObservation?.attributes.input), /"op":"upsert"/);
   assert.match(JSON.stringify(patchObservation?.attributes.output), /"A"/);
+});
+
+test("extract_product is one traced tool observation around its isolated model request", async () => {
+  const tracing = new RecordingTracing();
+  const runtime = createModelRuntime(tracing);
+  const model = runtime.getModel("hy3");
+  runtime.models.streamSimple = (_model, context) => {
+    const stream = createAssistantMessageEventStream();
+    const submitTool = context.tools?.[0];
+    const output = {
+      criteria: [{
+        item: {
+          id: "battery_life",
+          name: "续航时间",
+          description: "产品可持续使用的时间",
+          aliases: [],
+          type: "numeric",
+          units: ["小时"],
+          direction: { type: "larger_better" },
+        },
+        status: "observed",
+        values: [{
+          raw_value: "8 小时",
+          normalized_value: 8,
+          unit: "小时",
+          qualifier: null,
+          evidence: "商品 续航 8 小时",
+          ocr_page_id: null,
+        }],
+      }],
+      attributes: [],
+    };
+    const message = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "extract-submit", name: submitTool?.name, arguments: output }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage,
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    } as never;
+    queueMicrotask(() => {
+      stream.push({ type: "start", partial: message } as never);
+      stream.push({ type: "done", reason: "toolUse", message } as never);
+    });
+    return stream;
+  };
+
+  const native = createNativeAgentToolSet([EXTRACT_PRODUCT_TOOL], {
+    runtime,
+    projectRoot: path.resolve(import.meta.dirname, ".."),
+    getRuntimeContext: () => ({ sessionId: "session-a", agentName: "market_agent", projectRoot: path.resolve(import.meta.dirname, "..") }),
+  });
+  const [tool] = traceTools(native.tools, tracing);
+  await tracing.withObservation("market-turn", "agent", {}, async () => {
+    await tool.execute("extract-call", {
+      item_id: "sku-a",
+      dataset_category: "设备",
+      ocr_text: "商品 续航 8 小时",
+    });
+  }, "session-a");
+
+  const extractObservation = tracing.records.find((record) => record.name === "extract-product");
+  const generation = tracing.records.find((record) => record.name === "model-request");
+  assert.ok(extractObservation);
+  assert.equal(extractObservation?.type, "tool");
+  assert.equal(extractObservation?.parentSpanId, tracing.records[0]?.spanId);
+  assert.ok(generation);
+  assert.equal(generation?.parentSpanId, extractObservation?.spanId);
+  assert.match(JSON.stringify(extractObservation?.attributes.input), /sku-a/);
+  assert.match(JSON.stringify(extractObservation?.attributes.output), /battery_life/);
 });
 
 test("model abort is distinct from an exporter or provider error", async () => {

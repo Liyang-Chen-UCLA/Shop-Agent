@@ -7,10 +7,13 @@ import { Type } from "@earendil-works/pi-ai";
 import { messageText } from "./content.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { NativeToolRuntimeContext } from "./types.ts";
+import { createProductExtractorTool, EXTRACT_PRODUCT_TOOL } from "./product-extractor.ts";
+
+export { EXTRACT_PRODUCT_TOOL } from "./product-extractor.ts";
 
 export const WEB_SEARCH_TOOL = "web_search";
 export const DEVELOPER_ISSUE_TOOL = "report_developer_issue";
-export const NATIVE_TOOL_NAMES = [WEB_SEARCH_TOOL, DEVELOPER_ISSUE_TOOL] as const;
+export const NATIVE_TOOL_NAMES = [WEB_SEARCH_TOOL, DEVELOPER_ISSUE_TOOL, EXTRACT_PRODUCT_TOOL] as const;
 export const WEB_SEARCH_MODEL = "mimo-v2.5";
 export const WEB_SEARCH_THINKING = "off" as const;
 export const SEARCH_TRUNCATION_MARKER = "[搜索结果因长度限制已截断]";
@@ -26,6 +29,7 @@ export type NativeToolDefinition = {
 const NATIVE_TOOL_DEFINITIONS: readonly NativeToolDefinition[] = [
   { name: WEB_SEARCH_TOOL, description: "Research one query through an isolated fixed-model context." },
   { name: DEVELOPER_ISSUE_TOOL, description: "Append a bounded developer diagnostic with trusted framework metadata." },
+  { name: EXTRACT_PRODUCT_TOOL, description: "Extract one product's detected dimensions, values, and verbatim OCR evidence in an isolated model context." },
 ];
 
 export type SearchStats = {
@@ -234,6 +238,7 @@ export function createNativeAgentToolSet(
   for (const name of allowlist) {
     if (name === WEB_SEARCH_TOOL) tools.push(createSearchTool(options, searchStats));
     else if (name === DEVELOPER_ISSUE_TOOL) tools.push(createDeveloperIssueTool(options));
+    else if (name === EXTRACT_PRODUCT_TOOL) tools.push(createProductExtractorTool(options));
   }
   return { tools, searchStats };
 }

@@ -80,6 +80,83 @@ export const attributeSchema = {
   anyOf: [numericAttributeSchema, booleanAttributeSchema, categoricalAttributeSchema],
 };
 
+const productExtractionValueProperties = {
+  raw_value: { type: "string", minLength: 1 },
+  normalized_value: { type: ["string", "number", "boolean", "null"] },
+  unit: { type: ["string", "null"] },
+  qualifier: { type: ["string", "null"] },
+  evidence: { type: "string", minLength: 1 },
+  ocr_page_id: { type: ["string", "null"] },
+};
+
+const observedProductValueSchema = {
+  type: "object",
+  properties: {
+    ...productExtractionValueProperties,
+    normalized_value: { type: ["string", "number", "boolean"] },
+  },
+  required: ["raw_value", "normalized_value", "unit", "qualifier", "evidence", "ocr_page_id"],
+  additionalProperties: false,
+};
+
+const unparsedProductValueSchema = {
+  type: "object",
+  properties: {
+    ...productExtractionValueProperties,
+    normalized_value: { const: null },
+  },
+  required: ["raw_value", "normalized_value", "unit", "qualifier", "evidence", "ocr_page_id"],
+  additionalProperties: false,
+};
+
+function productExtractionEntrySchema(item: Record<string, unknown>) {
+  return {
+    oneOf: [
+      {
+        type: "object",
+        properties: {
+          item,
+          status: { const: "observed" },
+          values: { type: "array", minItems: 1, items: observedProductValueSchema },
+        },
+        required: ["item", "status", "values"],
+        additionalProperties: false,
+      },
+      {
+        type: "object",
+        properties: {
+          item,
+          status: { const: "unparsed" },
+          values: { type: "array", minItems: 1, items: unparsedProductValueSchema },
+        },
+        required: ["item", "status", "values"],
+        additionalProperties: false,
+      },
+    ],
+  };
+}
+
+export const extractProductInputSchema = {
+  type: "object",
+  properties: {
+    item_id: { type: "string", minLength: 1 },
+    dataset_category: { type: "string", minLength: 1 },
+    ocr_text: { type: "string", minLength: 1 },
+  },
+  required: ["item_id", "dataset_category", "ocr_text"],
+  additionalProperties: false,
+};
+
+export const productExtractionOutputSchema = {
+  type: "object",
+  properties: {
+    criteria: { type: "array", items: productExtractionEntrySchema(criterionSchema) },
+    attributes: { type: "array", items: productExtractionEntrySchema(attributeSchema) },
+  },
+  required: ["criteria", "attributes"],
+  additionalProperties: false,
+};
+
 export const criteriaOutputSchema = {
   type: "object",
   properties: {

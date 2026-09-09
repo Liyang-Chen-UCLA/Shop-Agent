@@ -2,6 +2,8 @@ export { defineConfig } from "./config.ts";
 export { createShopAgent, ShopAgent, type CreateShopAgentOptions } from "./shop-agent.ts";
 export { PythonWorker, resolveVenvPython } from "./python-worker.ts";
 export type { PythonExecutor } from "./python-executor.ts";
+export { EXTRACT_PRODUCT_TOOL, PRODUCT_EXTRACTOR_MODEL, PRODUCT_EXTRACTOR_THINKING, SUBMIT_PRODUCT_EXTRACTION_TOOL, createExtractProductTool, createProductExtractorTool, validateProductExtraction, validateProductExtractionInput } from "./product-extractor.ts";
+export type { ProductExtractionEntry, ProductExtractionInput, ProductExtractionOutput, ProductExtractionValue, ProductExtractorOptions } from "./product-extractor.ts";
 export { CONTRACT_STATE_TOOL_NAMES, ContractStateStore, createContractStateTools, emptyContractState, FINALIZE_STATE_TOOL, GET_STATE_TOOL, isContractStateToolName, PATCH_STATE_TOOL, validateContractState, validateContractStateConfig } from "./contract-state.ts";
 export type { ContractItem, ContractState, ContractStateFinalizeHook, ContractStateKind, ContractStateToolOptions, ContractStateToolSet } from "./contract-state.ts";
 export type {
