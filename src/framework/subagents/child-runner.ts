@@ -4,7 +4,7 @@ import { createPythonAgentTools } from "../python-tools.ts";
 import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
 import { messageText, sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { createTerminalOutputTool } from "../terminal-output.ts";
-import { createContractStateTools } from "../contract-state.ts";
+import { createContractStateTools, type ContractState } from "../contract-state.ts";
 import { composeSystemPrompt } from "../system-prompt.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { createInterface } from "node:readline";
@@ -69,8 +69,32 @@ async function main(): Promise<void> {
       searchStats: nativeToolSet.searchStats,
     }),
   });
+  const publishResearchBase = request.profile.id === "research_agent" && request.profile.contractState
+    ? async (state: ContractState) => {
+      if (!criteriaSearchSatisfied(nativeToolSet.searchStats)) {
+        throw new Error("research_agent must complete its mandatory four-query web_search research before finalize_state.");
+      }
+      const route = request.trustedRoute;
+      if (!route) throw new Error("finalize_state requires a trusted research route.");
+      const document = {
+        node: {
+          id: route.node_id,
+          name: route.node_name,
+          path: route.node_path.split(">").map((part) => part.trim()).filter(Boolean),
+        },
+        criteria: state.criteria,
+        attributes: state.attributes,
+      };
+      const validation = await python.validate(
+        { id: "market_v1" },
+        document,
+        { operation: "persist_base" },
+      );
+      if (!validation.valid) throw new Error(`finalize_state base publication failed: ${validation.error}`);
+    }
+    : undefined;
   const contractStateTools = request.profile.contractState
-    ? createContractStateTools(request.profile.contractState, request.contractState)
+    ? createContractStateTools(request.profile.contractState, request.contractState, { onFinalize: publishResearchBase })
     : undefined;
   const tools = traceTools([
     ...pythonTools,

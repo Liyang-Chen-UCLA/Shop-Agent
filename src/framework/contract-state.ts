@@ -5,12 +5,18 @@ import type { ContractStateConfig, JsonSchema } from "./types.ts";
 export const GET_STATE_TOOL = "get_state";
 export const PATCH_STATE_TOOL = "patch_state";
 export const FINALIZE_STATE_TOOL = "finalize_state";
+export const CONTRACT_STATE_TOOL_NAMES = [GET_STATE_TOOL, PATCH_STATE_TOOL, FINALIZE_STATE_TOOL] as const;
 
 export type ContractStateKind = "criterion" | "attribute";
 export type ContractItem = Record<string, unknown>;
 export type ContractState = {
   criteria: ContractItem[];
   attributes: ContractItem[];
+};
+
+export type ContractStateFinalizeHook = (state: ContractState) => void | Promise<void>;
+export type ContractStateToolOptions = {
+  onFinalize?: ContractStateFinalizeHook;
 };
 
 type UpsertPatch = {
@@ -55,6 +61,10 @@ function itemId(item: ContractItem): string {
 
 export function emptyContractState(): ContractState {
   return { criteria: [], attributes: [] };
+}
+
+export function isContractStateToolName(name: string): boolean {
+  return (CONTRACT_STATE_TOOL_NAMES as readonly string[]).includes(name);
 }
 
 /** Validate the generic opt-in configuration without knowing any Shop item fields. */
@@ -143,12 +153,18 @@ export class ContractStateStore {
   readonly patchSchema: JsonSchema;
   private current: ContractState;
   private finalizedState?: ContractState;
+  private readonly onFinalize?: ContractStateFinalizeHook;
 
-  constructor(config: ContractStateConfig, initialState: ContractState = emptyContractState()) {
+  constructor(
+    config: ContractStateConfig,
+    initialState: ContractState = emptyContractState(),
+    options: ContractStateToolOptions = {},
+  ) {
     validateContractStateConfig(config);
     this.config = config;
     this.patchSchema = patchSchema(config);
     this.current = validateContractState(config, initialState);
+    this.onFinalize = options.onFinalize;
   }
 
   get(): ContractState {
@@ -190,8 +206,11 @@ export class ContractStateStore {
     return this.get();
   }
 
-  finalize(): ContractState {
-    if (!this.finalizedState) this.finalizedState = this.get();
+  async finalize(): Promise<ContractState> {
+    if (this.finalizedState) return clone(this.finalizedState);
+    const state = this.get();
+    await this.onFinalize?.(state);
+    this.finalizedState = state;
     return clone(this.finalizedState);
   }
 }
@@ -204,8 +223,9 @@ export type ContractStateToolSet = {
 export function createContractStateTools(
   config: ContractStateConfig,
   initialState: ContractState = emptyContractState(),
+  options: ContractStateToolOptions = {},
 ): ContractStateToolSet {
-  const store = new ContractStateStore(config, initialState);
+  const store = new ContractStateStore(config, initialState, options);
   const tools: AgentTool<any>[] = [
     {
       name: GET_STATE_TOOL,
@@ -238,7 +258,8 @@ export function createContractStateTools(
       async execute(_toolCallId, params) {
         const validation = validateJsonSchema(NO_ARGUMENTS_SCHEMA, params);
         if (!validation.valid) throw new Error(`finalize_state arguments do not match the tool schema: ${validation.error}`);
-        return { ...stateResult(FINALIZE_STATE_TOOL, store.finalize()), terminate: true };
+        const state = await store.finalize();
+        return { ...stateResult(FINALIZE_STATE_TOOL, state), terminate: true };
       },
     },
   ];

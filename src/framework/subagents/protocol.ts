@@ -3,6 +3,12 @@ import type { PythonToolDefinition, PythonToolRuntimeContext, ResolvedAgentProfi
 import type { ContractState } from "../contract-state.ts";
 import type { TraceContext } from "../tracing/index.ts";
 
+export type TrustedRoute = {
+  node_id: string;
+  node_name: string;
+  node_path: string;
+};
+
 export type ChildRequest = {
   runId: string;
   /** Trusted parent session identity used by developer diagnostics. */
@@ -22,6 +28,8 @@ export type ChildRequest = {
   tools: PythonToolDefinition[];
   /** Trusted snapshot for an opt-in framework-owned contract state. */
   contractState?: ContractState;
+  /** Trusted route facts used by framework finalizers; never model-authored. */
+  trustedRoute?: TrustedRoute;
   attempt: number;
   traceContext?: TraceContext;
 };

@@ -26,8 +26,13 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(research?.systemPrompt ?? "", /"type":"target_range","unit":"小时"/);
   assert.match(research?.systemPrompt ?? "", /"type":"partial_order","better_than"/);
   assert.match(research?.systemPrompt ?? "", /attributes use the same common\/type-specific fields but must omit `direction` entirely/i);
-  assert.deepEqual(research?.outputValidator, { id: "criteria_v1" });
-  assert.match(composeSystemPrompt(research!), /submit the final structured result using the `submit_result` tool/);
+  assert.equal(research?.outputValidator, undefined);
+  assert.equal(research?.outputSchema, undefined);
+  assert.deepEqual(research?.tools, ["web_search", "get_state", "patch_state", "finalize_state", "report_developer_issue"]);
+  assert.ok(research?.contractState);
+  assert.doesNotMatch(composeSystemPrompt(research!), /submit the final structured result using the `submit_result` tool/);
+  assert.match(research?.systemPrompt ?? "", /call `finalize_state`/);
+  assert.doesNotMatch(research?.systemPrompt ?? "", /submit the final structured result using the `submit_result` tool/);
   const routeAgent = config.agents.find((agent) => agent.id === "route_agent");
   assert.equal(routeAgent?.model, undefined);
   assert.equal(routeAgent?.thinking, undefined);

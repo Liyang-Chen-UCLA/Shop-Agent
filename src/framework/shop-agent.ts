@@ -5,6 +5,7 @@ import { loadConfig } from "./config.ts";
 import { checkOpenCodeAuth, createModelRuntime, type ModelRuntime } from "./model-runtime.ts";
 import { discoverPythonTools, createPythonAgentTools } from "./python-tools.ts";
 import { createNativeAgentToolSet, isNativeToolName } from "./native-tools.ts";
+import { isContractStateToolName } from "./contract-state.ts";
 import { isDeveloperDiagnosticAgentEvent, messageText, sanitizeDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticMessages } from "./content.ts";
 import { SessionStore } from "./session-store.ts";
 import { Logger } from "./logger.ts";
@@ -82,7 +83,7 @@ export class ShopAgent {
     const definitions = await discoverPythonTools(cwd, config.toolDirectories);
     for (const profile of config.agents) {
       for (const tool of profile.tools ?? []) {
-        if (tool !== "delegate_agent" && !definitions.has(tool) && !isNativeToolName(tool)) {
+        if (tool !== "delegate_agent" && !definitions.has(tool) && !isNativeToolName(tool) && !isContractStateToolName(tool)) {
           throw new Error(`Agent '${profile.id}' references unknown Python tool '${tool}'.`);
         }
       }

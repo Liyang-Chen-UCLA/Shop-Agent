@@ -16,12 +16,21 @@ import { SessionStore } from "../src/framework/session-store.ts";
 import { createShopAgent } from "../src/framework/shop-agent.ts";
 import { PythonWorker } from "../src/framework/python-worker.ts";
 import { renderRunCard, renderTaskState, summarizeValue } from "../src/tui/presentation.ts";
+import { criteriaOutputSchema } from "../shop/schemas.ts";
 
 const cwd = path.resolve(import.meta.dirname, "..");
 const workerDefinitions = await discoverPythonTools(cwd, ["shop/tools", "tests/fixtures"]);
 const testPython = new PythonWorker(cwd, { timeoutMs: 30_000, envAllowlist: [] }, workerDefinitions);
 await testPython.start();
 test.after(async () => testPython.close());
+
+function criteriaValidatorProfile(config: Awaited<ReturnType<typeof loadConfig>>) {
+  return {
+    ...config.agents.find((agent) => agent.id === "research_agent")!,
+    outputSchema: criteriaOutputSchema,
+    outputValidator: { id: "criteria_v1" },
+  };
+}
 
 test("loads project config and OpenCode Go model catalog", async () => {
   const config = await loadConfig(cwd);
@@ -33,7 +42,11 @@ test("loads project config and OpenCode Go model catalog", async () => {
     "taxonomy_get_children",
     "report_developer_issue",
   ]);
-  assert.equal(config.agents.find((agent) => agent.id === "research_agent")?.outputValidator?.id, "criteria_v1");
+  const research = config.agents.find((agent) => agent.id === "research_agent");
+  assert.equal(research?.outputValidator, undefined);
+  assert.equal(research?.outputSchema, undefined);
+  assert.deepEqual(research?.tools, ["web_search", "get_state", "patch_state", "finalize_state", "report_developer_issue"]);
+  assert.ok(research?.contractState);
   assert.match(config.agents[0].systemPrompt, /orchestrator/i);
 
   const runtime = createModelRuntime();
@@ -233,6 +246,36 @@ test("framework contract state upserts, overwrites, moves, removes, and finalize
   assert.deepEqual(stateTools.store.finalized(), { criteria: [], attributes: [] });
 });
 
+test("finalize_state awaits publication and only finalizes after the hook succeeds", async () => {
+  const config = {
+    itemSchemas: {
+      criterion: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false },
+      attribute: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false },
+    },
+  };
+  let published: unknown;
+  let rejectPublication = true;
+  const stateTools = createContractStateTools(config, undefined, {
+    onFinalize: async (state) => {
+      await Promise.resolve();
+      if (rejectPublication) throw new Error("publication failed");
+      published = state;
+    },
+  });
+  const finalize = stateTools.tools.find((tool) => tool.name === "finalize_state")!;
+
+  await assert.rejects(() => finalize.execute("failed-finalize", {}), /publication failed/);
+  assert.equal(stateTools.store.isFinalized, false);
+  assert.equal(published, undefined);
+
+  rejectPublication = false;
+  const result = await finalize.execute("successful-finalize", {});
+  assert.equal(result.terminate, true);
+  assert.deepEqual(published, { criteria: [], attributes: [] });
+  assert.deepEqual((result.details as any).state, { criteria: [], attributes: [] });
+  assert.deepEqual(stateTools.store.finalized(), { criteria: [], attributes: [] });
+});
+
 test("submit_result accepts schema-valid arguments and stores the result", async () => {
   const config = await loadConfig(cwd);
   const profile = config.agents.find((agent) => agent.id === "route_agent")!;
@@ -257,7 +300,7 @@ test("submit_result returns a tool error for schema-invalid arguments", async ()
 
 test("submit_result propagates criteria_v1 rejection as a tool error", async () => {
   const config = await loadConfig(cwd);
-  const profile = config.agents.find((agent) => agent.id === "research_agent")!;
+  const profile = criteriaValidatorProfile(config);
   const terminal = createTerminalOutputTool(profile, { python: testPython })!;
   const invalid = {
     node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },
@@ -301,7 +344,7 @@ test("submit_result propagates market_v1 rejection as a tool error", async () =>
 
 test("submit_result stores the trusted validator value", async () => {
   const config = await loadConfig(cwd);
-  const profile = config.agents.find((agent) => agent.id === "research_agent")!;
+  const profile = criteriaValidatorProfile(config);
   const terminal = createTerminalOutputTool(profile, { python: testPython })!;
   const value = {
     node: { id: "267", name: "手机", path: ["电子产品", "通讯"] },

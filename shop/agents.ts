@@ -1,5 +1,5 @@
 import type { AgentProfile } from "../src/framework/index.ts";
-import { criteriaOutputSchema, marketOutputSchema, taxonomyNodeSchema } from "./schemas.ts";
+import { attributeSchema, criterionSchema, marketOutputSchema, taxonomyNodeSchema } from "./schemas.ts";
 
 export { criteriaOutputSchema, marketOutputSchema } from "./schemas.ts";
 
@@ -44,11 +44,15 @@ export const agents: AgentProfile[] = [
   {
     id: "research_agent",
     role: "subagent",
-    description: "Constructs transient category-level evaluation standards and distinguishing attributes from confirmed taxonomy facts.",
+    description: "Maintains a category-level evaluation contract from confirmed taxonomy facts and publishes it through framework state.",
     systemPrompt: { file: "./shop/prompts/research-agent.md" },
-    tools: ["web_search", "report_developer_issue"],
-    outputSchema: criteriaOutputSchema,
-    outputValidator: { id: "criteria_v1" },
+    tools: ["web_search", "get_state", "patch_state", "finalize_state", "report_developer_issue"],
+    contractState: {
+      itemSchemas: {
+        criterion: criterionSchema,
+        attribute: attributeSchema,
+      },
+    },
     timeoutMs: 600_000,
     maxRetries: 0,
   },

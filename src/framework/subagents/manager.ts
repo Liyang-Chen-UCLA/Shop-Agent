@@ -16,8 +16,7 @@ import type {
 import type { PythonExecutor } from "../python-executor.ts";
 import { DEVELOPER_ISSUE_TOOL, isNativeToolName, WEB_SEARCH_TOOL } from "../native-tools.ts";
 import { sanitizeDeveloperDiagnosticMessages } from "../content.ts";
-import { validateWithTrustedValidator } from "../output-validator.ts";
-import { emptyContractState, validateContractState, type ContractState } from "../contract-state.ts";
+import { emptyContractState, isContractStateToolName, validateContractState, type ContractState } from "../contract-state.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { NoopTracing, type TraceObservation, type Tracing } from "../tracing/index.ts";
 
@@ -113,7 +112,7 @@ export class SubagentManager {
     await this.saveSummary(runDirectory, detail);
 
     const tools = (options.profile.tools ?? [])
-      .filter((name) => name !== "delegate_agent" && !isNativeToolName(name))
+      .filter((name) => name !== "delegate_agent" && !isNativeToolName(name) && !isContractStateToolName(name))
       .map((name) => {
         const definition = this.toolDefinitions.get(name);
         if (!definition) throw new Error(`Subagent '${options.profile.id}' references unknown tool '${name}'.`);
@@ -134,6 +133,7 @@ export class SubagentManager {
       contractState: options.profile.contractState
         ? (this.contractStates.get(sessionId) ?? emptyContractState())
         : undefined,
+      trustedRoute: this.routeFromTask(options.task),
       attempt: 1,
       traceContext: this.tracing.context(sessionId),
     };
@@ -231,26 +231,6 @@ export class SubagentManager {
     return JSON.stringify(route);
   }
 
-  private async persistBaseCriteria(result: RunResult, sessionId: string, runId: string): Promise<void> {
-    if (result.value === undefined) throw new Error("research_agent returned no structured result to persist as base criteria");
-    const validation = await validateWithTrustedValidator(
-      { id: "market_v1" },
-      result.value,
-      this.requirePython(),
-      undefined,
-      {
-        operation: "persist_base",
-        sessionId,
-        runId,
-        dataDirectory: this.config.dataDirectory,
-        datasetPath: this.config.datasetPath,
-        maxDistinctProducts: this.config.maxDistinctProducts,
-        agentName: "research_agent",
-      },
-    );
-    if (!validation.valid) throw new Error(`Base criteria persistence failed: ${validation.error}`);
-  }
-
   private async runCriteriaAndMarket(options: RunOptions): Promise<RunResult> {
     return this.tracing.withObservation("build-market-criteria", "chain", {
       input: options.task,
@@ -270,7 +250,6 @@ export class SubagentManager {
       chain?.update({ output: cached.value ?? cached.text, metadata: { cache: "market", hit: true } });
       return cached;
     }
-    const sessionId = options.sessionId ?? "unknown-session";
     const hasBase = await this.tracing.withObservation("check-base-cache", "span", { input: this.routeFromTask(options.task) }, async (span) => {
       const hit = await this.hasBase(options.task);
       span?.update({ output: { hit }, metadata: { cache: "base", hit } });
@@ -285,13 +264,7 @@ export class SubagentManager {
       chain?.update({ output: result.value ?? result.text, metadata: { cache: "base", hit: true } });
       return result;
     }
-    const criteria = await this.runSingle(options);
-    await this.tracing.withObservation("persist-base", "span", {
-      input: { runId: criteria.runId },
-    }, async (span) => {
-      await this.persistBaseCriteria(criteria, sessionId, criteria.runId);
-      span?.update({ output: { persisted: true } });
-    });
+    await this.runSingle(options);
     const result = await this.runSingle({
       ...options,
       profile: marketProfile,
@@ -457,10 +430,26 @@ export class SubagentManager {
       }
       return python.executeTool(allowed, event.callId, event.arguments, event.context, signal);
     }
-    if (request.profile.outputValidator?.id !== event.validator) {
+    const contractStateFinalizer = request.profile.id === "research_agent"
+      && Boolean(request.profile.contractState)
+      && event.validator === "market_v1"
+      && event.context?.operation === "persist_base";
+    if (request.profile.outputValidator?.id !== event.validator && !contractStateFinalizer) {
       throw new Error(`Subagent '${request.profile.id}' is not allowed to call trusted validator '${event.validator}'.`);
     }
-    const result = await python.validate({ id: event.validator }, event.value, event.context, signal);
+    const context = contractStateFinalizer
+      ? {
+        ...(event.context ?? {}),
+        sessionId: request.sessionId,
+        runId: request.runId,
+        dataDirectory: request.dataDirectory,
+        datasetPath: request.datasetPath,
+        maxDistinctProducts: request.maxDistinctProducts,
+        agentName: request.profile.id,
+        operation: "persist_base",
+      }
+      : event.context;
+    const result = await python.validate({ id: event.validator }, event.value, context, signal);
     if (!result.valid) throw new Error(result.error);
     return result.value;
   }

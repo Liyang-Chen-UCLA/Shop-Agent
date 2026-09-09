@@ -66,7 +66,7 @@ test("uses an existing base artifact and runs only the market profile", async ()
   }
 });
 
-test("runs research, persists base, then runs market when neither artifact exists", async () => {
+test("runs research then market when neither artifact exists", async () => {
   const { directory, manager, research, market } = await setupManager();
   try {
     const calls: string[] = [];
@@ -76,13 +76,9 @@ test("runs research, persists base, then runs market when neither artifact exist
       childTasks.push(options.task);
       return { text: options.profile.id, value: { stage: options.profile.id }, runId: `${options.profile.id}-run` };
     };
-    (manager as any).persistBaseCriteria = async (_result: any, _sessionId: string, _runId: string) => {
-      calls.push("persist_base");
-    };
-
     const result = await manager.run({ profile: research, task, sessionId: "session" });
     assert.equal(result.value && (result.value as any).stage, market.id);
-    assert.deepEqual(calls, [research.id, "persist_base", market.id]);
+    assert.deepEqual(calls, [research.id, market.id]);
     assert.deepEqual(childTasks, [task, task]);
   } finally {
     await rm(directory, { recursive: true, force: true });
