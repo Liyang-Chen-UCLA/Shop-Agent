@@ -6,14 +6,10 @@ import type {
   SemanticMatchInput,
   SemanticMatcher,
 } from "./types.ts";
+import { normalizeSemanticLabel } from "../../src/framework/semantic-matcher.ts";
 
 export function normalizeLabel(value: string): string {
-  return value
-    .normalize("NFKC")
-    .toLocaleLowerCase("und")
-    .replace(/[^\p{Letter}\p{Number}]+/gu, " ")
-    .trim()
-    .replace(/\s+/g, " ");
+  return normalizeSemanticLabel(value);
 }
 
 export function flattenItems(document: CriteriaDocument): EvaluatedItem[] {

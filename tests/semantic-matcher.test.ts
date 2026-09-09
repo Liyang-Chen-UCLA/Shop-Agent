@@ -1,0 +1,166 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { ModelSemanticMatcher } from "../eval/src/semantic-matcher.ts";
+import type { ModelRuntime } from "../src/framework/model-runtime.ts";
+import { SharedSemanticMatcher, type SemanticItem } from "../src/framework/semantic-matcher.ts";
+import { TaxonomySemanticMatchCache } from "../src/framework/semantic-match-cache.ts";
+
+function item(id: string, name: string, aliases: string[] = []): SemanticItem {
+  return { id, name, aliases, type: "categorical" };
+}
+
+function fakeRuntime(response: string | Error): { runtime: ModelRuntime; calls: () => number } {
+  let requestCount = 0;
+  const runtime = {
+    getModel(id: string) { return { id }; },
+    ensureThinking() {},
+    streamSimple() {
+      requestCount += 1;
+      return {
+        result: async () => {
+          if (response instanceof Error) throw response;
+          return { stopReason: "stop", content: [{ type: "text", text: response }] };
+        },
+      };
+    },
+  } as unknown as ModelRuntime;
+  return { runtime, calls: () => requestCount };
+}
+
+async function writeCache(root: string, nodeId: string, value: unknown): Promise<string> {
+  const directory = path.join(root, "market-criteria", nodeId);
+  await mkdir(directory, { recursive: true });
+  const filePath = path.join(directory, "semantic-match.json");
+  await writeFile(filePath, `${JSON.stringify(value)}\n`, "utf8");
+  return filePath;
+}
+
+test("exact alias matching completes without an LLM request", async () => {
+  const { runtime, calls } = fakeRuntime(new Error("exact match must not call the model"));
+  const matcher = new SharedSemanticMatcher({ runtime, modelId: "matcher", sessionId: "test" });
+
+  const result = await matcher.matchOne(
+    item("connection_type", "接入方式", ["连接模式"]),
+    [item("connection_mode", "连接类型", ["连接模式"])],
+  );
+
+  assert.equal(result?.method, "alias");
+  assert.equal(result?.right.id, "connection_mode");
+  assert.equal(calls(), 0);
+});
+
+test("a positive taxonomy cache hit completes without an LLM request", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-semantic-cache-"));
+  try {
+    const cache = new TaxonomySemanticMatchCache({ runtimeData: root, nodeId: "301", mode: "readOnly" });
+    await writeCache(root, "301", {
+      entries: [{ terms: ["连接类型"], canonical_item_id: "connection_mode" }],
+    });
+    const { runtime, calls } = fakeRuntime(new Error("cache hit must not call the model"));
+    const matcher = new SharedSemanticMatcher({ runtime, modelId: "matcher", sessionId: "test", cache });
+
+    const result = await matcher.matchOne(
+      item("connection_type", "接入方式", ["连接类型"]),
+      [item("connection_mode", "连接模式")],
+    );
+
+    assert.equal(result?.method, "cache");
+    assert.equal(result?.right.id, "connection_mode");
+    assert.equal(calls(), 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a cache miss falls back to the LLM and stale targets are ignored", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-semantic-cache-"));
+  try {
+    const filePath = await writeCache(root, "301", {
+      entries: [{ terms: ["旧连接方式"], canonical_item_id: "removed_item" }],
+    });
+    const { runtime, calls } = fakeRuntime(JSON.stringify({
+      pairs: [{ gold_ref: "gold:candidate", pred_ref: "prediction:canonical" }],
+    }));
+    const cache = new TaxonomySemanticMatchCache({ runtimeData: root, nodeId: "301", mode: "readOnly" });
+    const matcher = new SharedSemanticMatcher({ runtime, modelId: "matcher", sessionId: "test", cache });
+    const candidate = { ...item("candidate", "新连接方式"), ref: "gold:candidate" };
+    const canonical = { ...item("canonical", "连接模式"), ref: "prediction:canonical" };
+
+    const result = await matcher.matchOne(candidate, [canonical]);
+
+    assert.equal(result?.method, "llm");
+    assert.equal(result?.right.id, "canonical");
+    assert.equal(calls(), 1);
+    assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), {
+      entries: [{ terms: ["旧连接方式"], canonical_item_id: "removed_item" }],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("unmatched candidates do not create a cache entry", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-semantic-cache-"));
+  try {
+    const cache = new TaxonomySemanticMatchCache({ runtimeData: root, nodeId: "301", mode: "readWrite" });
+    const { runtime } = fakeRuntime(JSON.stringify({ pairs: [] }));
+    const matcher = new SharedSemanticMatcher({ runtime, modelId: "matcher", sessionId: "test", cache });
+
+    const result = await matcher.matchOne(item("candidate", "候选维度"), [item("canonical", "标准维度")]);
+
+    assert.equal(result, undefined);
+    await assert.rejects(readFile(cache.filePath, "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("accepted Market mappings are explicitly persisted in the taxonomy cache", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-semantic-cache-"));
+  try {
+    const cache = new TaxonomySemanticMatchCache({ runtimeData: root, nodeId: "301", mode: "readWrite" });
+    const candidate = item("connection_type", "接入方式", ["连接类型"]);
+    const canonical = item("connection_mode", "连接模式");
+
+    assert.equal(await cache.writeAccepted(candidate, canonical), true);
+    assert.deepEqual(JSON.parse(await readFile(cache.filePath, "utf8")), {
+      entries: [{
+        terms: ["connection_type", "接入方式", "连接类型"],
+        canonical_item_id: "connection_mode",
+      }],
+    });
+
+    const readOnly = new TaxonomySemanticMatchCache({ runtimeData: root, nodeId: "301", mode: "readOnly" });
+    assert.equal(await readOnly.writeAccepted(item("other", "其他"), canonical), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Eval adapter reads semantic cache without writing it", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-semantic-cache-"));
+  try {
+    const filePath = await writeCache(root, "301", {
+      entries: [{ terms: ["候选维度"], canonical_item_id: "canonical" }],
+    });
+    const cache = new TaxonomySemanticMatchCache({ runtimeData: root, nodeId: "301", mode: "readOnly" });
+    const { runtime, calls } = fakeRuntime(new Error("Eval cache hit must not call the model"));
+    const matcher = new ModelSemanticMatcher(runtime, "matcher", "eval-session", "off", { cache });
+
+    const result = await matcher.match({
+      gold: [{ ref: "criteria:candidate", kind: "criteria", item: item("candidate", "候选维度") as any }],
+      pred: [{ ref: "attribute:canonical", kind: "attribute", item: item("canonical", "标准维度") as any }],
+    });
+
+    assert.deepEqual(result, [{ gold_ref: "criteria:candidate", pred_ref: "attribute:canonical" }]);
+    assert.equal(calls(), 0);
+    assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), {
+      entries: [{ terms: ["候选维度"], canonical_item_id: "canonical" }],
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

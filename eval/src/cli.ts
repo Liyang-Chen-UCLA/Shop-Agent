@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from "../../src/framework/config.ts";
 import { createModelRuntime } from "../../src/framework/model-runtime.ts";
+import { TaxonomySemanticMatchCache } from "../../src/framework/semantic-match-cache.ts";
 import { SessionStore } from "../../src/framework/session-store.ts";
 import { ModelDefinitionJudge } from "./definition-judge.ts";
 import { loadEvalCase, loadPredictionArtifacts } from "./loaders.ts";
@@ -68,6 +69,13 @@ async function main(): Promise<void> {
       config.defaultModel,
       session.metadata.id,
       config.defaultThinking,
+      {
+        cache: new TaxonomySemanticMatchCache({
+          runtimeData: config.dataDirectory,
+          nodeId: gold.node.id,
+          mode: "readOnly",
+        }),
+      },
     );
     const definitionJudge = new ModelDefinitionJudge(
       runtime,
