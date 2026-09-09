@@ -4,6 +4,7 @@ import { createPythonAgentTools } from "../python-tools.ts";
 import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
 import { messageText, sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { createTerminalOutputTool } from "../terminal-output.ts";
+import { createContractStateTools } from "../contract-state.ts";
 import { composeSystemPrompt } from "../system-prompt.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { createInterface } from "node:readline";
@@ -68,9 +69,13 @@ async function main(): Promise<void> {
       searchStats: nativeToolSet.searchStats,
     }),
   });
+  const contractStateTools = request.profile.contractState
+    ? createContractStateTools(request.profile.contractState, request.contractState)
+    : undefined;
   const tools = traceTools([
     ...pythonTools,
     ...nativeToolSet.tools,
+    ...(contractStateTools?.tools ?? []),
     ...(terminalOutputTool ? [terminalOutputTool] : []),
   ], tracing);
   agent = new Agent({
@@ -146,6 +151,11 @@ async function main(): Promise<void> {
       throw new Error(`Subagent '${request.profile.id}' must successfully call ${terminalOutputTool?.name ?? "submit_result"}.`);
     }
     value = terminalOutputTool.state.validatedValue;
+  } else if (request.profile.contractState) {
+    if (!contractStateTools?.store.isFinalized) {
+      throw new Error(`Subagent '${request.profile.id}' must successfully call finalize_state.`);
+    }
+    value = contractStateTools.store.finalized();
   }
   observation?.update({
     output: value ?? text,

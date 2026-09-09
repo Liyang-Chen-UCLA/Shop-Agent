@@ -10,6 +10,7 @@ import type {
   ShopAgentConfigInput,
 } from "./types.ts";
 import { listTrustedOutputValidators } from "./output-validator.ts";
+import { validateContractStateConfig } from "./contract-state.ts";
 
 const FALLBACK_ORCHESTRATOR_PROMPT = "Route each request to an available focused subagent when useful, then synthesize its result.";
 const FALLBACK_DELEGATE_PROMPT = "Complete the one bounded task provided by the orchestrator and return a self-contained result.";
@@ -110,6 +111,13 @@ function validateConfig(config: ShopAgentConfig): void {
     if (!profile.id.trim()) throw new Error("Agent profile id cannot be empty.");
     if (ids.has(profile.id)) throw new Error(`Duplicate agent profile: ${profile.id}`);
     ids.add(profile.id);
+    if (profile.contractState) {
+      try {
+        validateContractStateConfig(profile.contractState);
+      } catch (error) {
+        throw new Error(`Agent '${profile.id}' has invalid contractState config: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     if (profile.outputValidator) {
       if (!listTrustedOutputValidators().includes(profile.outputValidator.id)) {
         throw new Error(`Agent '${profile.id}' references unknown trusted output validator '${profile.outputValidator.id}'.`);

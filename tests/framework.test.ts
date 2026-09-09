@@ -9,6 +9,7 @@ import { createPythonAgentTools, discoverPythonTools } from "../src/framework/py
 import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, MAX_CRITERIA_SEARCH_QUERIES, SEARCH_RESULT_MAX_CHARS, SEARCH_TRUNCATION_MARKER, truncateSearchResult } from "../src/framework/native-tools.ts";
 import { validateWithTrustedValidator } from "../src/framework/output-validator.ts";
 import { createTerminalOutputTool, SUBMIT_RESULT_TOOL } from "../src/framework/terminal-output.ts";
+import { createContractStateTools } from "../src/framework/contract-state.ts";
 import { isDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticMessages } from "../src/framework/content.ts";
 import { validateJsonSchema } from "../src/framework/schema.ts";
 import { SessionStore } from "../src/framework/session-store.ts";
@@ -186,6 +187,50 @@ test("structured profiles receive only the unified submit_result terminal tool",
   assert.equal(terminal?.name, SUBMIT_RESULT_TOOL);
   assert.equal(terminal?.parameters, structured?.outputSchema);
   assert.equal(createTerminalOutputTool(ordinary!), undefined);
+});
+
+test("framework contract state upserts, overwrites, moves, removes, and finalizes atomically", async () => {
+  const itemSchemas = {
+    criterion: {
+      type: "object",
+      properties: { id: { type: "string" }, label: { type: "string" } },
+      required: ["id", "label"],
+      additionalProperties: false,
+    },
+    attribute: {
+      type: "object",
+      properties: { id: { type: "string" }, label: { type: "string" } },
+      required: ["id", "label"],
+      additionalProperties: false,
+    },
+  };
+  const stateTools = createContractStateTools({ itemSchemas });
+  const get = stateTools.tools.find((tool) => tool.name === "get_state")!;
+  const patch = stateTools.tools.find((tool) => tool.name === "patch_state")!;
+  const finalize = stateTools.tools.find((tool) => tool.name === "finalize_state")!;
+  const read = async () => JSON.parse(((await get.execute("get", {})).content[0] as { text: string }).text);
+
+  assert.deepEqual(await read(), { criteria: [], attributes: [] });
+  await patch.execute("create", { op: "upsert", kind: "criterion", item: { id: "A", label: "first" } });
+  assert.deepEqual(await read(), { criteria: [{ id: "A", label: "first" }], attributes: [] });
+
+  await patch.execute("overwrite", { op: "upsert", kind: "criterion", item: { id: "A", label: "second" } });
+  assert.deepEqual(await read(), { criteria: [{ id: "A", label: "second" }], attributes: [] });
+
+  await patch.execute("move", { op: "upsert", kind: "attribute", item: { id: "A", label: "attribute" } });
+  assert.deepEqual(await read(), { criteria: [], attributes: [{ id: "A", label: "attribute" }] });
+
+  await assert.rejects(
+    () => patch.execute("invalid", { op: "upsert", kind: "criterion", item: { id: "B" } }),
+    /patch_state arguments.*required|label/,
+  );
+  assert.deepEqual(await read(), { criteria: [], attributes: [{ id: "A", label: "attribute" }] });
+
+  await patch.execute("remove", { op: "remove", item_id: "A" });
+  assert.deepEqual(await read(), { criteria: [], attributes: [] });
+  const result = await finalize.execute("finalize", {});
+  assert.equal(result.terminate, true);
+  assert.deepEqual(stateTools.store.finalized(), { criteria: [], attributes: [] });
 });
 
 test("submit_result accepts schema-valid arguments and stores the result", async () => {

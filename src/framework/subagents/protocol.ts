@@ -1,5 +1,6 @@
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { PythonToolDefinition, PythonToolRuntimeContext, ResolvedAgentProfile } from "../types.ts";
+import type { ContractState } from "../contract-state.ts";
 import type { TraceContext } from "../tracing/index.ts";
 
 export type ChildRequest = {
@@ -19,6 +20,8 @@ export type ChildRequest = {
   model: string;
   thinking: ThinkingLevel;
   tools: PythonToolDefinition[];
+  /** Trusted snapshot for an opt-in framework-owned contract state. */
+  contractState?: ContractState;
   attempt: number;
   traceContext?: TraceContext;
 };

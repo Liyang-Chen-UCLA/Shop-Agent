@@ -17,6 +17,7 @@ import type { PythonExecutor } from "../python-executor.ts";
 import { DEVELOPER_ISSUE_TOOL, isNativeToolName, WEB_SEARCH_TOOL } from "../native-tools.ts";
 import { sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { validateWithTrustedValidator } from "../output-validator.ts";
+import { emptyContractState, validateContractState, type ContractState } from "../contract-state.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { NoopTracing, type TraceObservation, type Tracing } from "../tracing/index.ts";
 
@@ -42,6 +43,7 @@ export class SubagentManager {
   private readonly toolDefinitions: Map<string, PythonToolDefinition>;
   private readonly python?: PythonExecutor;
   private readonly tracing: Tracing;
+  private readonly contractStates = new Map<string, ContractState>();
 
   constructor(
     config: ResolvedConfig,
@@ -81,11 +83,20 @@ export class SubagentManager {
     return this.tracing.withObservation(name, "agent", {
       input: options.task,
       metadata: { agent: options.profile.id },
-    }, (observation) => this.runSingleObserved(options, observation));
+    }, async (observation) => {
+      const result = await this.runSingleObserved(options, observation);
+      if (options.profile.contractState) {
+        const sessionId = options.sessionId ?? result.runId;
+        const state = validateContractState(options.profile.contractState, result.value);
+        this.contractStates.set(sessionId, state);
+      }
+      return result;
+    });
   }
 
   private async runSingleObserved(options: RunOptions, observation?: TraceObservation): Promise<RunResult> {
     const runId = randomUUID();
+    const sessionId = options.sessionId ?? runId;
     const detail: RunDetail = {
       id: runId,
       agent: options.profile.id,
@@ -110,7 +121,7 @@ export class SubagentManager {
       });
     const request: ChildRequest = {
       runId,
-      sessionId: options.sessionId ?? runId,
+      sessionId,
       projectRoot: this.config.cwd,
       dataDirectory: this.config.dataDirectory,
       datasetPath: this.config.datasetPath,
@@ -120,8 +131,11 @@ export class SubagentManager {
       model: detail.model,
       thinking: detail.thinking,
       tools,
+      contractState: options.profile.contractState
+        ? (this.contractStates.get(sessionId) ?? emptyContractState())
+        : undefined,
       attempt: 1,
-      traceContext: this.tracing.context(options.sessionId ?? runId),
+      traceContext: this.tracing.context(sessionId),
     };
 
     const attempts = Math.max(1, (options.profile.maxRetries ?? 0) + 1);

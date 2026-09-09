@@ -8,6 +8,7 @@ import path from "node:path";
 import { loadConfig } from "../src/framework/config.ts";
 import { createModelRuntime } from "../src/framework/model-runtime.ts";
 import { SubagentManager } from "../src/framework/subagents/manager.ts";
+import { createContractStateTools } from "../src/framework/contract-state.ts";
 import { createShopAgent } from "../src/framework/shop-agent.ts";
 import { createTracing, mapCost, mapUsage, sanitizeTracePayload, traceTools } from "../src/framework/tracing/index.ts";
 import type {
@@ -200,6 +201,31 @@ test("delegate_agent run is represented only by its agent while list/get remain 
   const tools = tracing.records.filter((record) => record.type === "tool");
   assert.deepEqual(tools.map((record) => record.name), ["delegate-agent", "taxonomy-get-nodes"]);
   assert.ok(tools.every((record) => record.parentSpanId === root.spanId));
+});
+
+test("contract state mutations are ordinary traced tool observations", async () => {
+  const tracing = new RecordingTracing();
+  const { tools } = createContractStateTools({
+    itemSchemas: {
+      criterion: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false },
+      attribute: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false },
+    },
+  });
+  const traced = traceTools(tools, tracing);
+  await tracing.withObservation("shop-turn", "agent", {}, async () => {
+    await traced.find((tool) => tool.name === "patch_state")!.execute("patch", {
+      op: "upsert",
+      kind: "criterion",
+      item: { id: "A" },
+    });
+  }, "session-a");
+
+  const patchObservation = tracing.records.find((record) => record.name === "patch-state");
+  assert.ok(patchObservation);
+  assert.equal(patchObservation?.type, "tool");
+  assert.equal(patchObservation?.parentSpanId, tracing.records[0]?.spanId);
+  assert.match(JSON.stringify(patchObservation?.attributes.input), /"op":"upsert"/);
+  assert.match(JSON.stringify(patchObservation?.attributes.output), /"A"/);
 });
 
 test("model abort is distinct from an exporter or provider error", async () => {

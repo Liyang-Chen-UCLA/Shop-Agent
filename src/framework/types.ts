@@ -2,6 +2,14 @@ import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core"
 
 export type JsonSchema = Record<string, unknown>;
 
+/** Opt-in schema configuration for the framework-owned contract state tools. */
+export type ContractStateConfig = {
+  itemSchemas: {
+    criterion: JsonSchema;
+    attribute: JsonSchema;
+  };
+};
+
 export type ModelChoice = {
   provider: "opencode-go";
   id: string;
@@ -21,6 +29,8 @@ export type AgentProfile = {
   model?: ModelChoice;
   thinking?: ThinkingLevel;
   tools?: string[];
+  /** Enables framework-owned get_state, patch_state, and finalize_state tools. */
+  contractState?: ContractStateConfig;
   outputSchema?: JsonSchema;
   /** Trusted postprocessor configuration; never exposed as an LLM-visible tool. */
   outputValidator?: OutputValidatorConfig;
