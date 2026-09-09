@@ -91,17 +91,11 @@ export function createFailureUnits(
   const baseItems = base ? flattenItems(base) : undefined;
 
   for (const gold of unmatchedGold) {
-    const rootCause: RootCause = !baseItems
-      ? "unresolved"
-      : findRuleMatch(gold, baseItems) ? "market_error" : "criteria_error";
-    failures.push(failure("missing", gold, undefined, rootCause));
+    failures.push(failure("missing", gold, undefined, "market_error"));
   }
 
   for (const pred of unmatchedPred) {
-    const rootCause: RootCause = !baseItems
-      ? "unresolved"
-      : findRuleMatch(pred, baseItems) ? "criteria_error" : "market_error";
-    failures.push(failure("extra", undefined, pred, rootCause));
+    failures.push(failure("extra", undefined, pred, "market_error"));
   }
 
   for (const pairing of pairings) {

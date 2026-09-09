@@ -183,17 +183,25 @@ test("semantic matcher is injectable and its one-to-one pairings are used", asyn
   assert.equal(result.metrics.criteria_f1, 1);
 });
 
-test("final/base comparison assigns the minimal earliest divergence", async () => {
+test("missing and extra attribution is market-only with or without base", async () => {
   const gold = document([numeric("latency")]);
-  const marketMissing = document();
-  const fromMarket = await evaluate(gold, marketMissing, structuredClone(gold));
-  assert.equal(fromMarket.result.failures[0].root_cause, "market_error");
-  assert.equal(fromMarket.result.failures[0].earliest_divergence, "market");
-  assert.equal(fromMarket.result.failures[0].repair_target, "market-agent prompt / market-alignment skill");
+  const extra = categorical("color");
 
-  const fromCriteria = await evaluate(gold, marketMissing, document());
-  assert.equal(fromCriteria.result.failures[0].root_cause, "criteria_error");
-  assert.equal(fromCriteria.result.failures[0].earliest_divergence, "criteria");
+  for (const base of [undefined, document([gold.criteria[0]!], [extra])]) {
+    const missing = await evaluate(gold, document(), base);
+    const missingFailure = missing.result.failures[0];
+    assert.equal(missingFailure?.diff_type, "missing");
+    assert.equal(missingFailure?.root_cause, "market_error");
+    assert.equal(missingFailure?.earliest_divergence, "market");
+    assert.equal(missingFailure?.repair_target, "market-agent prompt / market-alignment skill");
+
+    const extraResult = await evaluate(document(), document([], [extra]), base);
+    const extraFailure = extraResult.result.failures[0];
+    assert.equal(extraFailure?.diff_type, "extra");
+    assert.equal(extraFailure?.root_cause, "market_error");
+    assert.equal(extraFailure?.earliest_divergence, "market");
+    assert.equal(extraFailure?.repair_target, "market-agent prompt / market-alignment skill");
+  }
 });
 
 test("taxonomy node mismatch fails before matching or telemetry", async () => {
