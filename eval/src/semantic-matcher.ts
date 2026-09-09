@@ -84,7 +84,6 @@ export class ModelSemanticMatcher implements SemanticMatcher {
     }, {
       sessionId: this.sessionId,
       ...(this.thinking === "off" ? {} : { reasoning: this.thinking }),
-      maxTokens: 2_000,
     }).result();
     if (response.stopReason === "error" || response.stopReason === "aborted") {
       throw new Error(`Semantic matcher model request failed: ${response.errorMessage ?? response.stopReason}`);

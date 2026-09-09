@@ -157,7 +157,6 @@ export class ModelDefinitionJudge implements DefinitionJudge {
       }, {
         sessionId: this.sessionId,
         ...(this.thinking === "off" ? {} : { reasoning: this.thinking }),
-        maxTokens: 2_000,
       }).result();
       if (response.stopReason === "error" || response.stopReason === "aborted") {
         throw new Error(`Definition judge model request failed: ${response.errorMessage ?? response.stopReason}`);
