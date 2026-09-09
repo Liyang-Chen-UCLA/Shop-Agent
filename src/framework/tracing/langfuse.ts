@@ -9,7 +9,7 @@ import {
 import { AlwaysOnSampler, NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { SpanStatusCode, TraceFlags, type SpanContext } from "@opentelemetry/api";
 import { errorMessage, sanitizeTracePayload } from "./sanitize.ts";
-import type { ObservationAttributes, ObservationType, TraceContext, TraceObservation, Tracing } from "./index.ts";
+import type { ObservationAttributes, ObservationType, RootTraceOptions, TraceContext, TraceObservation, Tracing } from "./index.ts";
 
 const FLUSH_TIMEOUT_MS = 3_000;
 
@@ -26,15 +26,19 @@ class LangfuseObservationHandle implements TraceObservation {
   private failureMarked = false;
   readonly raw: LangfuseObservation;
   readonly sessionId?: string;
+  readonly traceName: string;
+  readonly traceTags: string[];
 
-  constructor(raw: LangfuseObservation, sessionId?: string) {
+  constructor(raw: LangfuseObservation, sessionId?: string, traceName = "shop-turn", traceTags = ["shop-agent"]) {
     this.raw = raw;
     this.sessionId = sessionId;
+    this.traceName = traceName;
+    this.traceTags = traceTags;
     try {
       raw.otelSpan.setAttributes({
-        [LangfuseOtelSpanAttributes.TRACE_NAME]: "shop-turn",
+        [LangfuseOtelSpanAttributes.TRACE_NAME]: traceName,
         ...(sessionId ? { [LangfuseOtelSpanAttributes.TRACE_SESSION_ID]: sessionId } : {}),
-        [LangfuseOtelSpanAttributes.TRACE_TAGS]: ["shop-agent"],
+        ...(traceTags.length ? { [LangfuseOtelSpanAttributes.TRACE_TAGS]: traceTags } : {}),
       });
     } catch {
       // Tracing is deliberately fail-open.
@@ -144,7 +148,7 @@ export class LangfuseTracing implements Tracing {
       const raw = parent
         ? parent.raw.startObservation(name, sanitizeAttributes(attributes) as never, { asType: type } as never)
         : startObservation(name, sanitizeAttributes(attributes) as never, { asType: type } as never);
-      return new LangfuseObservationHandle(raw, parent?.sessionId);
+      return new LangfuseObservationHandle(raw, parent?.sessionId, parent?.traceName, parent?.traceTags);
     } catch {
       return undefined;
     }
@@ -160,8 +164,9 @@ export class LangfuseTracing implements Tracing {
     attributes: ObservationAttributes,
     fn: (observation: TraceObservation | undefined) => T | Promise<T>,
     sessionId?: string,
+    rootTrace?: RootTraceOptions,
   ): Promise<T> {
-    return this.run(name, type, attributes, this.storage.getStore(), undefined, fn, sessionId);
+    return this.run(name, type, attributes, this.storage.getStore(), undefined, fn, sessionId, rootTrace);
   }
 
   async withRemoteObservation<T>(
@@ -188,6 +193,7 @@ export class LangfuseTracing implements Tracing {
     remote: SpanContext | undefined,
     fn: (observation: TraceObservation | undefined) => T | Promise<T>,
     sessionId?: string,
+    rootTrace?: RootTraceOptions,
   ): Promise<T> {
     let handle: LangfuseObservationHandle | undefined;
     try {
@@ -198,7 +204,12 @@ export class LangfuseTracing implements Tracing {
               asType: type,
               ...(remote ? { parentSpanContext: remote } : {}),
             } as never);
-        return new LangfuseObservationHandle(raw, sessionId ?? parent?.sessionId);
+        return new LangfuseObservationHandle(
+          raw,
+          sessionId ?? parent?.sessionId,
+          rootTrace?.name ?? parent?.traceName,
+          rootTrace?.tags ?? parent?.traceTags,
+        );
       };
       handle = create();
     } catch {

@@ -21,6 +21,7 @@ export type ObservationAttributes = {
 };
 
 export type TraceContext = { traceId: string; parentSpanId: string; sessionId: string };
+export type RootTraceOptions = { name: string; tags?: string[] };
 
 export interface TraceObservation {
   readonly traceId: string;
@@ -36,7 +37,7 @@ export interface Tracing {
   context(sessionId: string): TraceContext | undefined;
   startObservation(name: string, type: ObservationType, attributes: ObservationAttributes): TraceObservation | undefined;
   runInScope<T>(observation: TraceObservation | undefined, fn: () => T): T;
-  withObservation<T>(name: string, type: ObservationType, attributes: ObservationAttributes, fn: (observation: TraceObservation | undefined) => T | Promise<T>, sessionId?: string): Promise<T>;
+  withObservation<T>(name: string, type: ObservationType, attributes: ObservationAttributes, fn: (observation: TraceObservation | undefined) => T | Promise<T>, sessionId?: string, rootTrace?: RootTraceOptions): Promise<T>;
   withRemoteObservation<T>(name: string, type: ObservationType, attributes: ObservationAttributes, parent: TraceContext, fn: (observation: TraceObservation | undefined) => T | Promise<T>): Promise<T>;
   flush(timeoutMs?: number): Promise<void>;
   shutdown(timeoutMs?: number): Promise<void>;

@@ -1,4 +1,4 @@
-import type { ObservationAttributes, ObservationType, TraceContext, TraceObservation, Tracing } from "./index.ts";
+import type { ObservationAttributes, ObservationType, RootTraceOptions, TraceContext, TraceObservation, Tracing } from "./index.ts";
 
 export class NoopTracing implements Tracing {
   readonly enabled = false;
@@ -13,6 +13,7 @@ export class NoopTracing implements Tracing {
     _attributes: ObservationAttributes,
     fn: (observation: TraceObservation | undefined) => T | Promise<T>,
     _sessionId?: string,
+    _rootTrace?: RootTraceOptions,
   ): Promise<T> {
     return fn(undefined);
   }

@@ -1,0 +1,352 @@
+{
+  "node": {
+    "id": "301",
+    "name": "游戏手柄",
+    "path": [
+      "电子产品",
+      "电子配件",
+      "计算机组件",
+      "输入设备",
+      "游戏手柄"
+    ]
+  },
+  "criteria": [
+    {
+      "id": "input_latency",
+      "name": "输入延迟",
+      "description": "从物理输入动作到主机收到对应输入事件的时间。须分别注明按键或摇杆、连接方式、平台、固件和统计口径；不等同于传输延迟、回报间隔或屏幕端到端延迟。定性“零延迟”不能归一化为0。",
+      "aliases": [
+        "输入时延",
+        "input lag"
+      ],
+      "type": "numeric",
+      "units": [
+        "毫秒"
+      ],
+      "formula": null,
+      "direction": {
+        "type": "smaller_better"
+      }
+    },
+    {
+      "id": "report_rate",
+      "name": "回报率",
+      "description": "每秒向主机上报输入状态的次数。记录按键或摇杆、连接方式及名义/实测口径；厂商上限不等同有效更新率，一秒N枪不属于回报率。方向仅限相同设备模式和可比测试条件。",
+      "aliases": [
+        "轮询率",
+        "Polling Rate"
+      ],
+      "type": "numeric",
+      "units": [
+        "Hz"
+      ],
+      "formula": null,
+      "direction": {
+        "type": "larger_better"
+      }
+    },
+    {
+      "id": "stick_center_error",
+      "name": "摇杆回中误差",
+      "description": "松手回中后，归一化摇杆输出偏离中心的幅度。须注明校准、死区、左右摇杆及量程；建议采用原始轴输出，在相同重复回中流程下比较。宣称“不漂移”或“0死区”不是回中误差为0的证据。",
+      "aliases": [
+        "回中偏差"
+      ],
+      "type": "numeric",
+      "units": [
+        "%"
+      ],
+      "formula": null,
+      "direction": {
+        "type": "smaller_better"
+      }
+    },
+    {
+      "id": "button_lifetime",
+      "name": "按键寿命",
+      "description": "指定按键在规定载荷、频率和失效判据下的按压循环次数。区分ABXY、肩键、扳机及背键，不能把摇杆寿命或整机使用年限移入此项。",
+      "aliases": [
+        "按键耐久次数"
+      ],
+      "type": "numeric",
+      "units": [
+        "次",
+        "万次"
+      ],
+      "formula": null,
+      "direction": {
+        "type": "larger_better"
+      }
+    },
+    {
+      "id": "stick_lifetime",
+      "name": "摇杆寿命",
+      "description": "指定摇杆在规定运动轨迹、载荷和失效判据下的循环次数。部件声明不能直接证明整机耐久性或永久无漂移。",
+      "aliases": [
+        "摇杆耐久次数"
+      ],
+      "type": "numeric",
+      "units": [
+        "次",
+        "万次"
+      ],
+      "formula": null,
+      "direction": {
+        "type": "larger_better"
+      }
+    },
+    {
+      "id": "battery_runtime",
+      "name": "电池续航时间",
+      "description": "依靠自身电池持续工作的时间。须记录产品版本、连接模式、震动及灯光设置；待机时间不算续航，手机供电或纯有线产品不填0小时。",
+      "aliases": [
+        "续航时长"
+      ],
+      "type": "numeric",
+      "units": [
+        "小时"
+      ],
+      "formula": null,
+      "direction": {
+        "type": "larger_better"
+      }
+    },
+    {
+      "id": "charging_time",
+      "name": "充电时间",
+      "description": "自带可充电电池从规定初始电量到充满的时间。须记录电源与电池条件；给手机快充的功率不能充当手柄充电时间。",
+      "aliases": [
+        "充满耗时"
+      ],
+      "type": "numeric",
+      "units": [
+        "小时",
+        "分钟"
+      ],
+      "formula": null,
+      "direction": {
+        "type": "smaller_better"
+      }
+    }
+  ],
+  "attributes": [
+    {
+      "id": "product_form",
+      "name": "产品形态",
+      "description": "用于限定适用范围。触屏辅助按键、专用移动控制器和独立双摇杆手柄分开记录；纯保护套不属于输入控制器。",
+      "aliases": [],
+      "type": "categorical",
+      "values": [
+        "独立手持手柄",
+        "手机拉伸手柄",
+        "专用移动控制器",
+        "触屏辅助按键",
+        "保护套/握把配件"
+      ],
+      "value_domain": "open"
+    },
+    {
+      "id": "compatible_platform",
+      "name": "兼容平台",
+      "description": "明确列出的设备/系统及版本，逐值保存。需区分原生支持、映射、串流与适配器条件；Steam不等于Xbox主机，标题提到的游戏也不能证明整个平台兼容。",
+      "aliases": [
+        "适用平台"
+      ],
+      "type": "categorical",
+      "values": [
+        "Windows",
+        "Android",
+        "iOS/iPadOS",
+        "Nintendo Switch",
+        "Xbox One",
+        "Xbox Series X/S",
+        "PlayStation 3",
+        "PlayStation 4",
+        "PlayStation 5",
+        "Android TV",
+        "车机"
+      ],
+      "value_domain": "open"
+    },
+    {
+      "id": "connection_mode",
+      "name": "连接方式",
+      "description": "区分USB有线数据连接、无线接收器、蓝牙、星闪和触屏物理传导；USB充电口本身不证明支持有线游戏。多个版本分开保留。",
+      "aliases": [
+        "连接模式"
+      ],
+      "type": "categorical",
+      "values": [
+        "USB有线",
+        "2.4GHz接收器",
+        "蓝牙",
+        "星闪",
+        "触屏物理传导"
+      ],
+      "value_domain": "open"
+    },
+    {
+      "id": "stick_sensor",
+      "name": "摇杆传感器类型",
+      "description": "只记录目标型号实际宣称的传感技术；双霍尔若未分清摇杆与扳机，不强行拆解。技术名称不能直接证明漂移率、精度或寿命。",
+      "aliases": [
+        "摇杆技术"
+      ],
+      "type": "categorical",
+      "values": [
+        "电位器",
+        "霍尔",
+        "TMR",
+        "磁变阻（未细分）"
+      ],
+      "value_domain": "open"
+    },
+    {
+      "id": "trigger_mode",
+      "name": "扳机模式",
+      "description": "区分线性模拟输入、微动数字输入和可切换模式，保留霍尔等传感器信息；触屏辅助器的枪形按键不等同线性扳机。",
+      "aliases": [
+        "扳机类型"
+      ],
+      "type": "categorical",
+      "values": [
+        "电位器线性",
+        "霍尔线性",
+        "微动数字",
+        "霍尔线性/微动双切"
+      ],
+      "value_domain": "open"
+    },
+    {
+      "id": "body_weight",
+      "name": "机身重量",
+      "description": "仅记录手柄本体重量，区分含电池、配件、底座与包装；多SKU重量独立保存。",
+      "aliases": [
+        "本体重量"
+      ],
+      "type": "numeric",
+      "units": [
+        "克"
+      ],
+      "formula": null
+    },
+    {
+      "id": "battery_capacity",
+      "name": "电池容量",
+      "description": "自带电池标称容量，不能当作续航；主机或手机供电不等于电池容量0。",
+      "aliases": [],
+      "type": "numeric",
+      "units": [
+        "mAh"
+      ],
+      "formula": null
+    },
+    {
+      "id": "remapping",
+      "name": "按键重映射",
+      "description": "设备或配套软件是否支持改变按键对应输入。记录平台、软件、脱机条件；游戏内拖动触屏按钮不等同设备重映射，宏录制也不自动等于单键重映射。",
+      "aliases": [
+        "键位映射"
+      ],
+      "type": "boolean"
+    },
+    {
+      "id": "turbo",
+      "name": "连发功能",
+      "description": "设备是否可自动重复发出输入。记录档位/模式与明确限制；游戏内射速、武器自动射击和营销一秒N枪不能单独证明设备连发。",
+      "aliases": [
+        "TURBO"
+      ],
+      "type": "boolean"
+    },
+    {
+      "id": "motion_control",
+      "name": "体感功能",
+      "description": "是否具有将设备姿态或运动用于游戏输入的功能。原生体感和软件映射体感分开限定，不可凭摇杆360度描述推断。",
+      "aliases": [
+        "体感输入"
+      ],
+      "type": "boolean"
+    },
+    {
+      "id": "vibration",
+      "name": "震动反馈",
+      "description": "是否具备震动功能。说明握把/扳机、原生/软件模拟及平台模式；马达数量不等于触觉反馈质量。",
+      "aliases": [
+        "振动反馈"
+      ],
+      "type": "boolean"
+    },
+    {
+      "id": "dock_support",
+      "name": "座充支持",
+      "description": "是否支持使用充电底座。支持座充与套餐已含底座分开，另购底座仍可表示支持，但必须保留另购条件。",
+      "aliases": [
+        "充电底座支持"
+      ],
+      "type": "boolean"
+    },
+    {
+      "id": "headset_jack",
+      "name": "耳麦接口",
+      "description": "是否明确具有耳机/耳麦接口，记录孔径和音频功能条件。Type-C充电口不证明支持音频。",
+      "aliases": [
+        "耳机接口"
+      ],
+      "type": "boolean"
+    },
+    {
+      "id": "nfc",
+      "name": "NFC功能",
+      "description": "是否明确支持NFC，注明平台和用途；OCR拼成NEC且无其他佐证时保留歧义，不能静默改字。",
+      "aliases": [],
+      "type": "boolean"
+    },
+    {
+      "id": "supported_thickness",
+      "name": "夹持设备厚度",
+      "description": "可夹持设备含保护壳的厚度或范围；仅适用于夹持式辅助器，不能当作手柄机身厚度。",
+      "aliases": [],
+      "type": "numeric",
+      "units": [
+        "毫米"
+      ],
+      "formula": null
+    },
+    {
+      "id": "stick_resolution",
+      "name": "摇杆输出分辨率",
+      "description": "记录厂商声明的离散级数或位数及轴/量程口径。ADC位数、采样分级和有效位置精度不自动等价，不用数值大小替代整体操控评价。",
+      "aliases": [],
+      "type": "numeric",
+      "units": [
+        "级",
+        "bit"
+      ],
+      "formula": null
+    },
+    {
+      "id": "deadzone_adjustable",
+      "name": "摇杆死区可调",
+      "description": "是否明确支持调节死区。可调范围、默认值、反死区和原始回中误差各自区分；0死区不代表零漂移。",
+      "aliases": [
+        "死区调节"
+      ],
+      "type": "boolean"
+    },
+    {
+      "id": "input_protocol",
+      "name": "输入协议",
+      "description": "明确说明的控制器输入协议/工作模式。XInput只表示输入接口，不能直接推出Xbox主机兼容或授权。",
+      "aliases": [],
+      "type": "categorical",
+      "values": [
+        "XInput",
+        "DInput",
+        "HID"
+      ],
+      "value_domain": "open"
+    }
+  ]
+}
+

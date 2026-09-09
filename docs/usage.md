@@ -57,7 +57,27 @@ Show full error stacks in the TUI and write diagnostics to `.shop-agent/logs/sho
 .\start.ps1 -DebugMode
 ```
 
-No npm command, package publication, link, or compilation step is part of this workflow.
+No npm package publication, link, or compilation step is part of the interactive workflow.
+
+## Benchmark eval
+
+Evaluate one explicit taxonomy case against the final market artifact associated
+with its Gold node and attach the results to an existing real Session:
+
+```powershell
+npm run eval -- --case gamepad --session <session-id>
+```
+
+The case resolves only to `eval/cases/<case-id>/gold.json`; the command never
+modifies Gold. Prediction and deterministic attribution inputs are read from
+`<runtimeData>/market-criteria/<node_id>/market.json` and `base.json`. Gold and
+prediction node IDs must match. The command creates a separate
+`benchmark-eval` Langfuse trace under the supplied Session and writes eight
+numeric Session Scores; it does not create a local eval output artifact.
+
+This command loads `.env` and requires OpenCode credentials when unmatched
+items need semantic matching, plus Langfuse public/secret keys for the primary
+eval output.
 
 Python dependencies are declared in `pyproject.toml` and locked in `uv.lock`. Provision the repo-local environment with uv. Normal startup never invokes uv; tools, trusted validators, and task state calls reuse the one `.venv` worker owned by the app.
 
