@@ -7,6 +7,7 @@ import type { SemanticMatchCacheItem, TaxonomySemanticMatchCache } from "./seman
 import { ContractStateStore, type ContractItem, type ContractStateKind } from "./contract-state.ts";
 
 export const SEMANTIC_MATCH_TOOL = "semantic_match";
+export const SEMANTIC_MATCH_BATCH_TOOL = "semantic_match_batch";
 
 export type SemanticItem = SemanticMatchCacheItem & {
   ref?: string;
@@ -20,6 +21,11 @@ export type SemanticMatchPair<Left extends SemanticItem = SemanticItem, Right ex
   left: Left;
   right: Right;
   method: SemanticMatchMethod;
+};
+
+export type SemanticMatchPairsOptions = {
+  /** Allow multiple left/extracted items to resolve to one right/canonical item. */
+  manyToOne?: boolean;
 };
 
 export type SharedSemanticMatcherOptions = {
@@ -39,6 +45,12 @@ export type SemanticMatchToolResult = {
   active_product_id: string;
 };
 
+export type SemanticMatchBatchToolResult = {
+  active_product_id: string;
+  matched: SemanticMatchToolResult[];
+  unmatched: SemanticMatchToolResult[];
+};
+
 export type SemanticMatchToolOptions = {
   store: ContractStateStore;
   runtime: ModelRuntime;
@@ -47,6 +59,11 @@ export type SemanticMatchToolOptions = {
   cache?: Pick<TaxonomySemanticMatchCache, "lookup" | "writeAccepted">;
   getActiveProductId: () => string | undefined;
   onResolved?: (result: SemanticMatchToolResult) => void | Promise<void>;
+};
+
+export type SemanticMatchBatchToolOptions = Omit<SemanticMatchToolOptions, "onResolved"> & {
+  onBeforeResolve?: () => void | Promise<void>;
+  onResolved?: (result: SemanticMatchBatchToolResult) => void | Promise<void>;
 };
 
 const SYSTEM_PROMPT = `You match evaluation dimensions for a shopping taxonomy benchmark.
@@ -60,6 +77,12 @@ Rules:
 - Criteria and attributes may be paired across kinds when the dimension is the same.
 - Do not compare field correctness and do not infer root cause.
 - Omit uncertain pairs. Do not invent refs.`;
+
+const MANY_TO_ONE_PAIRING_RULE = "- Each gold ref may occur at most once; a prediction ref may be paired with multiple gold refs when they are genuine aliases of the same dimension.";
+const MANY_TO_ONE_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
+  "- Pairing is one-to-one. Each ref may occur at most once.",
+  MANY_TO_ONE_PAIRING_RULE,
+);
 
 export function normalizeSemanticLabel(value: string): string {
   return value
@@ -137,7 +160,9 @@ function selectDeterministic<Left extends SemanticItem, Right extends SemanticIt
   right: readonly Right[],
   predicate: (left: Left, right: Right) => boolean,
   method: SemanticMatchMethod,
+  options: SemanticMatchPairsOptions = {},
 ): { pairs: SemanticMatchPair<Left, Right>[]; left: Left[]; right: Right[] } {
+  const manyToOne = options.manyToOne === true;
   const pairs: SemanticMatchPair<Left, Right>[] = [];
   const usedLeft = new Set<string>();
   const usedRight = new Set<string>();
@@ -147,22 +172,24 @@ function selectDeterministic<Left extends SemanticItem, Right extends SemanticIt
     if (usedLeft.has(leftRef)) continue;
     const candidates = right.filter((rightItem) => {
       const rightRef = rightItem.ref ?? rightItem.id;
-      return !usedRight.has(rightRef) && predicate(leftItem, rightItem);
+      return (manyToOne || !usedRight.has(rightRef)) && predicate(leftItem, rightItem);
     });
     if (candidates.length !== 1) continue;
     const rightItem = candidates[0];
-    const reverseCandidates = left.filter((candidate) => predicate(candidate, rightItem));
-    if (reverseCandidates.length !== 1) continue;
+    if (!manyToOne) {
+      const reverseCandidates = left.filter((candidate) => predicate(candidate, rightItem));
+      if (reverseCandidates.length !== 1) continue;
+    }
     const rightRef = rightItem.ref ?? rightItem.id;
     usedLeft.add(leftRef);
-    usedRight.add(rightRef);
+    if (!manyToOne) usedRight.add(rightRef);
     pairs.push({ left: leftItem, right: rightItem, method });
   }
 
   return {
     pairs,
     left: left.filter((item) => !usedLeft.has(item.ref ?? item.id)),
-    right: right.filter((item) => !usedRight.has(item.ref ?? item.id)),
+    right: manyToOne ? [...right] : right.filter((item) => !usedRight.has(item.ref ?? item.id)),
   };
 }
 
@@ -170,7 +197,9 @@ function validateModelPairings(
   pairings: Array<{ gold_ref: string; pred_ref: string }>,
   left: readonly SemanticItem[],
   right: readonly SemanticItem[],
+  options: SemanticMatchPairsOptions = {},
 ): SemanticMatchPair[] {
+  const manyToOne = options.manyToOne === true;
   const leftByRef = new Map(left.map((item, index) => [reference(item, "gold", index), item]));
   const rightByRef = new Map(right.map((item, index) => [reference(item, "prediction", index), item]));
   const usedLeft = new Set<string>();
@@ -180,11 +209,11 @@ function validateModelPairings(
     const rightItem = rightByRef.get(pair.pred_ref);
     if (!leftItem) throw new Error(`Semantic matcher returned unknown gold_ref '${pair.gold_ref}'.`);
     if (!rightItem) throw new Error(`Semantic matcher returned unknown pred_ref '${pair.pred_ref}'.`);
-    if (usedLeft.has(pair.gold_ref) || usedRight.has(pair.pred_ref)) {
+    if (usedLeft.has(pair.gold_ref) || (!manyToOne && usedRight.has(pair.pred_ref))) {
       throw new Error("Semantic matcher must return one-to-one pairings.");
     }
     usedLeft.add(pair.gold_ref);
-    usedRight.add(pair.pred_ref);
+    if (!manyToOne) usedRight.add(pair.pred_ref);
     return { left: leftItem, right: rightItem, method: "llm" as const };
   });
 }
@@ -213,15 +242,18 @@ export class SharedSemanticMatcher {
   async matchOne<Left extends SemanticItem, Right extends SemanticItem>(
     candidate: Left,
     canonicalItems: readonly Right[],
+    options: SemanticMatchPairsOptions = {},
   ): Promise<SemanticMatchPair<Left, Right> | undefined> {
-    const pairs = await this.matchPairs([candidate], canonicalItems);
+    const pairs = await this.matchPairs([candidate], canonicalItems, options);
     return pairs[0];
   }
 
   async matchPairs<Left extends SemanticItem, Right extends SemanticItem>(
     leftItems: readonly Left[],
     rightItems: readonly Right[],
+    options: SemanticMatchPairsOptions = {},
   ): Promise<SemanticMatchPair<Left, Right>[]> {
+    const manyToOne = options.manyToOne === true;
     let left = [...leftItems];
     let right = [...rightItems];
     const pairs: SemanticMatchPair<Left, Right>[] = [];
@@ -231,7 +263,7 @@ export class SharedSemanticMatcher {
       [(leftItem: Left, rightItem: Right) => nonEmptyEqual(leftItem.name, rightItem.name), "name" as const],
       [(leftItem: Left, rightItem: Right) => aliasMatch(leftItem, rightItem), "alias" as const],
     ] as const) {
-      const selected = selectDeterministic(left, right, predicate, method);
+      const selected = selectDeterministic(left, right, predicate, method, options);
       pairs.push(...selected.pairs);
       left = selected.left;
       right = selected.right;
@@ -255,20 +287,20 @@ export class SharedSemanticMatcher {
         if (!candidate.canonicalId) continue;
         const rightItem = right.find((item) => item.id === candidate.canonicalId);
         const matchingCandidates = byCanonicalId.get(candidate.canonicalId) ?? [];
-        if (!rightItem || matchingCandidates.length !== 1) continue;
+        if (!rightItem || (!manyToOne && matchingCandidates.length !== 1)) continue;
         const leftRef = candidate.leftItem.ref ?? candidate.leftItem.id;
         const rightRef = rightItem.ref ?? rightItem.id;
-        if (selectedLeft.has(leftRef) || selectedRight.has(rightRef)) continue;
+        if (selectedLeft.has(leftRef) || (!manyToOne && selectedRight.has(rightRef))) continue;
         selectedLeft.add(leftRef);
-        selectedRight.add(rightRef);
+        if (!manyToOne) selectedRight.add(rightRef);
         pairs.push({ left: candidate.leftItem, right: rightItem, method: "cache" });
       }
       left = left.filter((item) => !selectedLeft.has(item.ref ?? item.id));
-      right = right.filter((item) => !selectedRight.has(item.ref ?? item.id));
+      if (!manyToOne) right = right.filter((item) => !selectedRight.has(item.ref ?? item.id));
     }
 
     if (!left.length || !right.length || !this.runtime) return pairs;
-    const modelPairings = await this.matchWithModel(left, right);
+    const modelPairings = await this.matchWithModel(left, right, options);
     pairs.push(...modelPairings as SemanticMatchPair<Left, Right>[]);
     return pairs;
   }
@@ -276,12 +308,14 @@ export class SharedSemanticMatcher {
   private async matchWithModel<Left extends SemanticItem, Right extends SemanticItem>(
     left: readonly Left[],
     right: readonly Right[],
+    options: SemanticMatchPairsOptions = {},
   ): Promise<SemanticMatchPair<Left, Right>[]> {
     if (!this.modelId) throw new Error("Semantic matcher modelId is required for LLM fallback.");
     const model = this.runtime!.getModel(this.modelId);
     this.runtime!.ensureThinking(model, this.thinking);
+    const manyToOne = options.manyToOne === true;
     const response = await this.runtime!.streamSimple(model, {
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: manyToOne ? MANY_TO_ONE_SYSTEM_PROMPT : SYSTEM_PROMPT,
       messages: [{
         role: "user",
         content: JSON.stringify({
@@ -297,7 +331,7 @@ export class SharedSemanticMatcher {
     if (response.stopReason === "error" || response.stopReason === "aborted") {
       throw new Error(`Semantic matcher model request failed: ${response.errorMessage ?? response.stopReason}`);
     }
-    return validateModelPairings(parsePairings(parseJsonObject(messageText(response))), left, right) as SemanticMatchPair<Left, Right>[];
+    return validateModelPairings(parsePairings(parseJsonObject(messageText(response))), left, right, options) as SemanticMatchPair<Left, Right>[];
   }
 }
 
@@ -342,10 +376,64 @@ function semanticMatchInputSchema(store: ContractStateStore) {
   };
 }
 
-function textResult(value: SemanticMatchToolResult): { content: [{ type: "text"; text: string }]; details: Record<string, unknown> } {
+function semanticMatchBatchInputSchema(store: ContractStateStore) {
+  return {
+    type: "object",
+    properties: {
+      criteria: { type: "array", items: store.config.itemSchemas.criterion },
+      attributes: { type: "array", items: store.config.itemSchemas.attribute },
+    },
+    required: ["criteria", "attributes"],
+    additionalProperties: false,
+  };
+}
+
+function textResult<T>(tool: string, value: T): { content: [{ type: "text"; text: string }]; details: Record<string, unknown> } {
   return {
     content: [{ type: "text", text: JSON.stringify(value) }],
-    details: { tool: SEMANTIC_MATCH_TOOL, ...value },
+    details: { tool, ...(isRecord(value) ? value : {}) },
+  };
+}
+
+function canonicalItems(store: ContractStateStore, runtimeFields: Set<string>): SemanticItem[] {
+  const state = store.get();
+  return [
+    ...state.criteria.map((item) => ({ ...definitionOnly(item, runtimeFields), kind: "criterion", ref: `criterion:${String(item.id)}` })),
+    ...state.attributes.map((item) => ({ ...definitionOnly(item, runtimeFields), kind: "attribute", ref: `attribute:${String(item.id)}` })),
+  ];
+}
+
+async function acceptSemanticMatch(
+  options: Pick<SemanticMatchToolOptions, "store" | "cache">,
+  activeProductId: string,
+  candidate: ContractItem,
+  kind: ContractStateKind,
+  match: SemanticMatchPair,
+): Promise<SemanticMatchToolResult> {
+  const canonicalId = String(match.right.id);
+  options.store.updateRuntimeItem(canonicalId, (item) => {
+    const observed = Array.isArray(item.observed_product_ids)
+      ? item.observed_product_ids.filter((value): value is string => typeof value === "string")
+      : [];
+    return {
+      ...item,
+      aliases: mergedAliases([
+        item.name,
+        ...(Array.isArray(item.aliases) ? item.aliases : []),
+        candidate.name,
+        ...(Array.isArray(candidate.aliases) ? candidate.aliases : []),
+      ]),
+      observed_product_ids: [...new Set([...observed, activeProductId])],
+    };
+  });
+  await options.cache?.writeAccepted(candidate, match.right);
+  return {
+    candidate: { ...candidate },
+    kind,
+    matched: true,
+    canonical_item_id: canonicalId,
+    method: match.method,
+    active_product_id: activeProductId,
   };
 }
 
@@ -380,14 +468,10 @@ export function createSemanticMatchTool(options: SemanticMatchToolOptions): Agen
       const activeProductId = options.getActiveProductId();
       if (!activeProductId) throw new Error("semantic_match requires a successfully extracted active product.");
 
-      const state = options.store.get();
-      const canonicalItems: SemanticItem[] = [
-        ...state.criteria.map((item) => ({ ...definitionOnly(item, runtimeFields), kind: "criterion", ref: `criterion:${String(item.id)}` })),
-        ...state.attributes.map((item) => ({ ...definitionOnly(item, runtimeFields), kind: "attribute", ref: `attribute:${String(item.id)}` })),
-      ];
+      const canonical = canonicalItems(options.store, runtimeFields);
       const match = await matcher.matchOne(
         { ...candidate, kind, ref: `${kind}:${String(candidate.id)}` },
-        canonicalItems,
+        canonical,
       );
       if (!match) {
         const result: SemanticMatchToolResult = {
@@ -397,36 +481,84 @@ export function createSemanticMatchTool(options: SemanticMatchToolOptions): Agen
           active_product_id: activeProductId,
         };
         await options.onResolved?.(result);
-        return textResult(result);
+        return textResult(SEMANTIC_MATCH_TOOL, result);
       }
 
-      const canonicalId = String(match.right.id);
-      options.store.updateRuntimeItem(canonicalId, (item) => {
-        const observed = Array.isArray(item.observed_product_ids)
-          ? item.observed_product_ids.filter((value): value is string => typeof value === "string")
-          : [];
-        return {
-          ...item,
-          aliases: mergedAliases([
-            item.name,
-            ...(Array.isArray(item.aliases) ? item.aliases : []),
-            candidate.name,
-            ...(Array.isArray(candidate.aliases) ? candidate.aliases : []),
-          ]),
-          observed_product_ids: [...new Set([...observed, activeProductId])],
-        };
-      });
-      await options.cache?.writeAccepted(candidate, match.right);
-      const result: SemanticMatchToolResult = {
-        candidate: { ...candidate },
+      const result = await acceptSemanticMatch(options, activeProductId, candidate, kind, match);
+      await options.onResolved?.(result);
+      return textResult(SEMANTIC_MATCH_TOOL, result);
+    },
+  };
+}
+
+/**
+ * Create the Market-facing batch identity tool. Every candidate from one
+ * extracted product is resolved in a single matcher call. Identity matches
+ * update only trusted runtime metadata; unmatched candidates remain on the
+ * complete-item patch path.
+ */
+export function createSemanticMatchBatchTool(options: SemanticMatchBatchToolOptions): AgentTool<any> {
+  const parameters = semanticMatchBatchInputSchema(options.store);
+  const matcher = new SharedSemanticMatcher({
+    runtime: options.runtime,
+    modelId: options.modelId,
+    sessionId: options.sessionId,
+    thinking: "off",
+    cache: options.cache,
+  });
+  const runtimeFields = runtimeFieldNames(options.store);
+
+  return {
+    name: SEMANTIC_MATCH_BATCH_TOOL,
+    label: SEMANTIC_MATCH_BATCH_TOOL,
+    description: "Match all extracted criteria and attributes for one product to the current canonical contract by semantic identity. This never judges or changes definitions.",
+    parameters: Type.Unsafe(parameters),
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const validation = validateJsonSchema(parameters, params);
+      if (!validation.valid) throw new Error(`semantic_match_batch arguments do not match the input schema: ${validation.error}`);
+      if (!isRecord(params)) throw new Error("semantic_match_batch arguments must be an object.");
+      const activeProductId = options.getActiveProductId();
+      if (!activeProductId) throw new Error("semantic_match_batch requires a successfully extracted active product.");
+      await options.onBeforeResolve?.();
+
+      const criteria = params.criteria as ContractItem[];
+      const attributes = params.attributes as ContractItem[];
+      const candidates = [
+        ...criteria.map((candidate) => ({ kind: "criterion" as const, candidate })),
+        ...attributes.map((candidate) => ({ kind: "attribute" as const, candidate })),
+      ];
+      const left = candidates.map(({ kind, candidate }) => ({
+        ...candidate,
         kind,
-        matched: true,
-        canonical_item_id: canonicalId,
-        method: match.method,
+        ref: `${kind}:${String(candidate.id)}`,
+      } satisfies SemanticItem));
+      const matches = await matcher.matchPairs(left, canonicalItems(options.store, runtimeFields), { manyToOne: true });
+      const matchByLeftRef = new Map(matches.map((match) => [match.left.ref ?? match.left.id, match]));
+      const matched: SemanticMatchToolResult[] = [];
+      const unmatched: SemanticMatchToolResult[] = [];
+
+      for (const { kind, candidate } of candidates) {
+        const match = matchByLeftRef.get(`${kind}:${String(candidate.id)}`);
+        if (!match) {
+          unmatched.push({
+            candidate: { ...candidate },
+            kind,
+            matched: false,
+            active_product_id: activeProductId,
+          });
+          continue;
+        }
+        matched.push(await acceptSemanticMatch(options, activeProductId, candidate, kind, match));
+      }
+
+      const result: SemanticMatchBatchToolResult = {
         active_product_id: activeProductId,
+        matched,
+        unmatched,
       };
       await options.onResolved?.(result);
-      return textResult(result);
+      return textResult(SEMANTIC_MATCH_BATCH_TOOL, result);
     },
   };
 }

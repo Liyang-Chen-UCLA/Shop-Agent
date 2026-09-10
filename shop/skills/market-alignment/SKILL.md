@@ -10,12 +10,21 @@ requesting the next one.
 2. Immediately call `extract_product` with that OCR. The extractor is isolated
    from base state and previous products, so treat its candidates as fresh
    canonical definitions.
-3. For each returned criterion or attribute, call `semantic_match`.
-4. A matched candidate only updates trusted runtime identity metadata. An
-   unmatched, valid candidate may be submitted with one complete
-   `patch_state` upsert. The patch must not contain
+3. Handle criteria and attributes by kind. The framework snapshots whether
+   each canonical kind is empty when extraction completes. Set aside every
+   candidate whose kind was empty; those candidates do not require semantic
+   matching.
+4. When candidates remain for a kind that was non-empty, first call
+   `semantic_match_batch` exactly once with all and only those candidates and
+   an empty array for the other kind. A matched candidate only updates trusted
+   runtime identity metadata; multiple extracted candidates may match one
+   canonical item. Skip the batch if no candidates require matching. Then
+   submit every set-aside candidate and every unmatched result with one
+   complete `patch_state` upsert. A patch must not contain
    `observed_product_ids`; the framework supplies it.
-5. Only use `patch_state remove` for an explicit bad, duplicate, or obsolete
+5. Finish all direct patches and unmatched patches before requesting the next
+   `shopping_env({})` sample.
+6. Only use `patch_state remove` for an explicit bad, duplicate, or obsolete
    item. Do not remove low-frequency or unmentioned dimensions.
 
 The framework merges aliases by normalized identity and retains all existing
@@ -26,7 +35,8 @@ step.
 
 ## Finalization
 
-Repeat the complete transaction until the trusted sample count is reached.
+Repeat the complete transaction—including every direct and unmatched patch—
+until the trusted sample count is reached.
 Do not build a product-by-contract matrix or write product files. Do not
 create a not-mentioned row for a dimension absent from the isolated
 extraction. Keep zero-observation canonical items. Call `finalize_state({})`

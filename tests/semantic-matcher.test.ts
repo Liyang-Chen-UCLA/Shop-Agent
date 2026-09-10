@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { ModelSemanticMatcher } from "../eval/src/semantic-matcher.ts";
 import type { ModelRuntime } from "../src/framework/model-runtime.ts";
-import { createSemanticMatchTool, SharedSemanticMatcher, type SemanticItem } from "../src/framework/semantic-matcher.ts";
+import { createSemanticMatchBatchTool, createSemanticMatchTool, SharedSemanticMatcher, type SemanticItem } from "../src/framework/semantic-matcher.ts";
 import { TaxonomySemanticMatchCache } from "../src/framework/semantic-match-cache.ts";
 import { createContractStateTools } from "../src/framework/contract-state.ts";
 
@@ -51,6 +51,69 @@ test("exact alias matching completes without an LLM request", async () => {
   assert.equal(result?.method, "alias");
   assert.equal(result?.right.id, "connection_mode");
   assert.equal(calls(), 0);
+});
+
+test("many-to-one deterministic matching reuses one canonical item without an LLM request", async () => {
+  const { runtime, calls } = fakeRuntime(new Error("deterministic match must not call the model"));
+  const matcher = new SharedSemanticMatcher({ runtime, modelId: "matcher", sessionId: "test" });
+
+  const result = await matcher.matchPairs(
+    [item("candidate-a", "同一维度"), item("candidate-b", "同一维度")],
+    [item("canonical", "同一维度")],
+    { manyToOne: true },
+  );
+
+  assert.deepEqual(result.map((pair) => [pair.left.id, pair.right.id, pair.method]), [
+    ["candidate-a", "canonical", "name"],
+    ["candidate-b", "canonical", "name"],
+  ]);
+  assert.equal(calls(), 0);
+});
+
+test("many-to-one unresolved candidates share one LLM fallback and one canonical item", async () => {
+  const { runtime, calls } = fakeRuntime(JSON.stringify({ pairs: [
+    { gold_ref: "gold:first", pred_ref: "prediction:canonical" },
+    { gold_ref: "gold:second", pred_ref: "prediction:canonical" },
+  ] }));
+  const matcher = new SharedSemanticMatcher({ runtime, modelId: "matcher", sessionId: "test" });
+
+  const result = await matcher.matchPairs(
+    [{ ...item("first", "第一维度"), ref: "gold:first" }, { ...item("second", "第二维度"), ref: "gold:second" }],
+    [{ ...item("canonical", "标准维度"), ref: "prediction:canonical" }],
+    { manyToOne: true },
+  );
+
+  assert.deepEqual(result.map((pair) => [pair.left.id, pair.right.id, pair.method]), [
+    ["first", "canonical", "llm"],
+    ["second", "canonical", "llm"],
+  ]);
+  assert.equal(calls(), 1);
+});
+
+test("many-to-one positive cache hits reuse one canonical item without an LLM request", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "shop-agent-semantic-cache-"));
+  try {
+    await writeCache(root, "301", {
+      entries: [{ terms: ["第一维度", "第二维度"], canonical_item_id: "canonical" }],
+    });
+    const cache = new TaxonomySemanticMatchCache({ runtimeData: root, nodeId: "301", mode: "readOnly" });
+    const { runtime, calls } = fakeRuntime(new Error("cache hits must not call the model"));
+    const matcher = new SharedSemanticMatcher({ runtime, modelId: "matcher", sessionId: "test", cache });
+
+    const result = await matcher.matchPairs(
+      [item("first", "第一维度"), item("second", "第二维度")],
+      [item("canonical", "标准维度")],
+      { manyToOne: true },
+    );
+
+    assert.deepEqual(result.map((pair) => [pair.left.id, pair.right.id, pair.method]), [
+      ["first", "canonical", "cache"],
+      ["second", "canonical", "cache"],
+    ]);
+    assert.equal(calls(), 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("a positive taxonomy cache hit completes without an LLM request", async () => {
@@ -224,4 +287,121 @@ test("Market semantic_match updates only trusted aliases and observed product me
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Market semantic_match_batch resolves all candidates once and keeps unmatched definitions for patch_state", async () => {
+  const itemSchema = {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      name: { type: "string" },
+      aliases: { type: "array", items: { type: "string" } },
+      type: { const: "categorical" },
+    },
+    required: ["id", "name", "aliases", "type"],
+    additionalProperties: false,
+  };
+  const stateTools = createContractStateTools({
+    itemSchemas: { criterion: itemSchema, attribute: itemSchema },
+    runtimeItemSchema: {
+      type: "object",
+      properties: { observed_product_ids: { type: "array", items: { type: "string" } } },
+      required: ["observed_product_ids"],
+      additionalProperties: false,
+    },
+    runtimeMutableFields: ["aliases", "observed_product_ids"],
+  }, {
+    criteria: [{ id: "connection_mode", name: "连接类型", aliases: [], type: "categorical", observed_product_ids: [] }],
+    attributes: [],
+  });
+  const { runtime, calls } = fakeRuntime(JSON.stringify({ pairs: [
+    { gold_ref: "criterion:candidate", pred_ref: "criterion:connection_mode" },
+  ] }));
+  const resolved: any[] = [];
+  const tool = createSemanticMatchBatchTool({
+    store: stateTools.store,
+    runtime,
+    modelId: "matcher",
+    sessionId: "market-session",
+    getActiveProductId: () => "product-1",
+    onResolved: (result) => { resolved.push(result); },
+  });
+
+  const result = await tool.execute("batch-1", {
+    criteria: [{ id: "candidate", name: "连接模式", aliases: [], type: "categorical" }],
+    attributes: [{ id: "new-attribute", name: "新属性", aliases: [], type: "categorical" }],
+  });
+  const value = JSON.parse((result.content[0] as { text: string }).text);
+
+  assert.equal(calls(), 1);
+  assert.equal(resolved.length, 1);
+  assert.deepEqual(value.matched.map((entry: any) => ({ id: entry.candidate.id, canonical: entry.canonical_item_id })), [
+    { id: "candidate", canonical: "connection_mode" },
+  ]);
+  assert.deepEqual(value.unmatched.map((entry: any) => entry.candidate.id), ["new-attribute"]);
+  assert.deepEqual(stateTools.store.get().criteria[0], {
+    id: "connection_mode",
+    name: "连接类型",
+    aliases: ["连接类型", "连接模式"],
+    type: "categorical",
+    observed_product_ids: ["product-1"],
+  });
+});
+
+test("Market semantic_match_batch supports multiple extracted candidates mapping to one canonical item", async () => {
+  const itemSchema = {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      name: { type: "string" },
+      aliases: { type: "array", items: { type: "string" } },
+      type: { const: "categorical" },
+    },
+    required: ["id", "name", "aliases", "type"],
+    additionalProperties: false,
+  };
+  const stateTools = createContractStateTools({
+    itemSchemas: { criterion: itemSchema, attribute: itemSchema },
+    runtimeItemSchema: {
+      type: "object",
+      properties: { observed_product_ids: { type: "array", items: { type: "string" } } },
+      required: ["observed_product_ids"],
+      additionalProperties: false,
+    },
+    runtimeMutableFields: ["aliases", "observed_product_ids"],
+  }, {
+    criteria: [{ id: "connection_mode", name: "标准维度", aliases: [], type: "categorical", observed_product_ids: [] }],
+    attributes: [],
+  });
+  const { runtime, calls } = fakeRuntime(JSON.stringify({ pairs: [
+    { gold_ref: "criterion:first", pred_ref: "criterion:connection_mode" },
+    { gold_ref: "attribute:second", pred_ref: "criterion:connection_mode" },
+  ] }));
+  const tool = createSemanticMatchBatchTool({
+    store: stateTools.store,
+    runtime,
+    modelId: "matcher",
+    sessionId: "market-session",
+    getActiveProductId: () => "product-1",
+  });
+
+  const result = await tool.execute("batch-1", {
+    criteria: [{ id: "first", name: "第一维度", aliases: [], type: "categorical" }],
+    attributes: [{ id: "second", name: "第二维度", aliases: [], type: "categorical" }],
+  });
+  const value = JSON.parse((result.content[0] as { text: string }).text);
+
+  assert.equal(calls(), 1);
+  assert.deepEqual(value.matched.map((entry: any) => [entry.candidate.id, entry.canonical_item_id]), [
+    ["first", "connection_mode"],
+    ["second", "connection_mode"],
+  ]);
+  assert.deepEqual(value.unmatched, []);
+  assert.deepEqual(stateTools.store.get().criteria[0], {
+    id: "connection_mode",
+    name: "标准维度",
+    aliases: ["标准维度", "第一维度", "第二维度"],
+    type: "categorical",
+    observed_product_ids: ["product-1"],
+  });
 });

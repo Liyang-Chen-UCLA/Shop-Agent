@@ -6,8 +6,8 @@ export { EXTRACT_PRODUCT_TOOL, PRODUCT_EXTRACTOR_MODEL, PRODUCT_EXTRACTOR_THINKI
 export type { ProductExtractionInput, ProductExtractionOutput, ProductExtractorOptions } from "./product-extractor.ts";
 export { CONTRACT_STATE_TOOL_NAMES, ContractStateStore, createContractStateTools, emptyContractState, FINALIZE_STATE_TOOL, GET_STATE_TOOL, isContractStateToolName, PATCH_STATE_TOOL, validateContractState, validateContractStateConfig } from "./contract-state.ts";
 export type { ContractItem, ContractState, ContractStateFinalizeHook, ContractStateKind, ContractStateToolOptions, ContractStateToolSet, ContractStateUpsertRuntimeHook } from "./contract-state.ts";
-export { createSemanticMatchTool, normalizeSemanticLabel, SEMANTIC_MATCH_TOOL, SemanticIdentityService, SemanticMatcher, SharedSemanticMatcher } from "./semantic-matcher.ts";
-export type { SemanticItem, SemanticMatchMethod, SemanticMatchPair, SemanticMatchToolOptions, SemanticMatchToolResult, SharedSemanticMatcherOptions } from "./semantic-matcher.ts";
+export { createSemanticMatchBatchTool, createSemanticMatchTool, normalizeSemanticLabel, SEMANTIC_MATCH_BATCH_TOOL, SEMANTIC_MATCH_TOOL, SemanticIdentityService, SemanticMatcher, SharedSemanticMatcher } from "./semantic-matcher.ts";
+export type { SemanticItem, SemanticMatchBatchToolOptions, SemanticMatchBatchToolResult, SemanticMatchMethod, SemanticMatchPair, SemanticMatchPairsOptions, SemanticMatchToolOptions, SemanticMatchToolResult, SharedSemanticMatcherOptions } from "./semantic-matcher.ts";
 export { SemanticMatchCache, TaxonomySemanticMatchCache } from "./semantic-match-cache.ts";
 export type { SemanticCacheItem, SemanticMatchCacheDocument, SemanticMatchCacheEntry, SemanticMatchCacheMode, SemanticMatchCacheOptions } from "./semantic-match-cache.ts";
 export type {

@@ -1,17 +1,18 @@
 import { Agent } from "@earendil-works/pi-agent-core";
 import { createModelRuntime } from "../model-runtime.ts";
 import { createPythonAgentTools } from "../python-tools.ts";
-import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, SEMANTIC_MATCH_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
+import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, SEMANTIC_MATCH_BATCH_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
 import { messageText, sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { createTerminalOutputTool } from "../terminal-output.ts";
-import { createContractStateTools, type ContractState } from "../contract-state.ts";
-import { createSemanticMatchTool, type SemanticMatchToolResult } from "../semantic-matcher.ts";
+import { createContractStateTools, PATCH_STATE_TOOL, type ContractItem, type ContractState } from "../contract-state.ts";
+import { createSemanticMatchBatchTool, type SemanticMatchBatchToolResult } from "../semantic-matcher.ts";
 import { TaxonomySemanticMatchCache } from "../semantic-match-cache.ts";
 import { composeSystemPrompt } from "../system-prompt.ts";
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { createInterface } from "node:readline";
 import { ChildPythonProxy } from "./python-proxy.ts";
 import { createTracing, traceTools, type TraceObservation } from "../tracing/index.ts";
+import { MarketProductTransaction } from "./market-product-transaction.ts";
 
 function emit(event: ChildEvent): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -56,21 +57,13 @@ async function main(): Promise<void> {
     maxDistinctProducts: request.maxDistinctProducts,
     agentName: request.profile.id,
   });
-  const productTransaction: {
-    sampledProductId?: string;
-    activeProductId?: string;
-    outstandingCandidateIds: Set<string>;
-    awaitingPatchCandidateId?: string;
-    complete: boolean;
-  } = {
-    outstandingCandidateIds: new Set(),
-    complete: true,
-  };
+  const productTransaction = new MarketProductTransaction();
+  let contractStateTools: ReturnType<typeof createContractStateTools> | undefined;
   const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, python, runtimeContext, {
     onBeforeTool: (definition) => {
       if (definition.name !== "shopping_env") return;
       if (productTransaction.sampledProductId && !productTransaction.complete) {
-        throw new Error("Complete the current product transaction with extract_product and semantic_match/patch_state before requesting another shopping_env sample.");
+        throw new Error("Complete the current product transaction with extract_product, semantic_match_batch, and patch_state before requesting another shopping_env sample.");
       }
     },
     onToolResult: (definition, result) => {
@@ -78,14 +71,10 @@ async function main(): Promise<void> {
       if (!result || typeof result !== "object" || Array.isArray(result) || typeof (result as Record<string, unknown>).item_id !== "string") {
         throw new Error("shopping_env returned no trusted active product id.");
       }
-      productTransaction.sampledProductId = (result as Record<string, unknown>).item_id as string;
-      productTransaction.activeProductId = undefined;
-      productTransaction.outstandingCandidateIds = new Set();
-      productTransaction.awaitingPatchCandidateId = undefined;
-      productTransaction.complete = false;
+      productTransaction.sampled((result as Record<string, unknown>).item_id as string);
     },
   });
-  const nativeToolSet = createNativeAgentToolSet(allowlist.filter((name) => name !== SEMANTIC_MATCH_TOOL), {
+  const nativeToolSet = createNativeAgentToolSet(allowlist.filter((name) => name !== SEMANTIC_MATCH_BATCH_TOOL), {
     runtime,
     projectRoot: request.projectRoot,
     getRuntimeContext: () => ({ sessionId: request.sessionId, agentName: request.profile.id, projectRoot: request.projectRoot }),
@@ -95,14 +84,8 @@ async function main(): Promise<void> {
       if (!productTransaction.sampledProductId || input.item_id !== productTransaction.sampledProductId) {
         throw new Error("extract_product must use the OCR item_id returned by the current shopping_env transaction.");
       }
-      const candidateIds = [
-        ...output.criteria.map((item) => item.id),
-        ...output.attributes.map((item) => item.id),
-      ];
-      productTransaction.activeProductId = input.item_id;
-      productTransaction.outstandingCandidateIds = new Set(candidateIds);
-      productTransaction.awaitingPatchCandidateId = undefined;
-      productTransaction.complete = candidateIds.length === 0;
+      if (!contractStateTools) throw new Error("extract_product requires initialized contract state tools.");
+      productTransaction.extracted(input.item_id, output, contractStateTools.store.get());
     },
   });
   const terminalOutputTool = createTerminalOutputTool(request.profile, {
@@ -140,7 +123,7 @@ async function main(): Promise<void> {
       if (!validation.valid) throw new Error(`finalize_state ${request.profile.id === "market_agent" ? "market" : "base"} publication failed: ${validation.error}`);
     }
     : undefined;
-  const contractStateTools = request.profile.contractState
+  contractStateTools = request.profile.contractState
     ? createContractStateTools(request.profile.contractState, request.contractState, {
       onFinalize: publishContractState,
       runtime: request.profile.id === "market_agent"
@@ -148,43 +131,49 @@ async function main(): Promise<void> {
           onUpsert: (_kind, item, existing) => {
             const activeProductId = productTransaction.activeProductId;
             if (!activeProductId) throw new Error("market_agent patch_state requires a successfully extracted active product.");
+            productTransaction.assertUpsertAllowed(_kind, item);
             const existingIds = existing && Array.isArray(existing.observed_product_ids)
               ? existing.observed_product_ids.filter((value): value is string => typeof value === "string")
               : [];
             const next = [...new Set([...existingIds, activeProductId])];
-            if (productTransaction.awaitingPatchCandidateId) {
-              productTransaction.awaitingPatchCandidateId = undefined;
-              productTransaction.complete = productTransaction.outstandingCandidateIds.size === 0;
-            }
             return { observed_product_ids: next };
           },
         }
         : undefined,
     })
     : undefined;
-  const semanticMatchTool = request.profile.id === "market_agent"
+  if (request.profile.id === "market_agent" && contractStateTools) {
+    const patchStateTool = contractStateTools.tools.find((tool) => tool.name === PATCH_STATE_TOOL);
+    if (!patchStateTool) throw new Error("market_agent requires patch_state.");
+    const executePatchState = patchStateTool.execute.bind(patchStateTool);
+    patchStateTool.execute = async (toolCallId, params, signal, onUpdate) => {
+      const result = await executePatchState(toolCallId, params, signal, onUpdate);
+      if (params && typeof params === "object" && !Array.isArray(params)
+        && (params as Record<string, unknown>).op === "upsert") {
+        productTransaction.upsertApplied((params as { item: ContractItem }).item);
+      }
+      return result;
+    };
+  }
+  const semanticMatchBatchTool = request.profile.id === "market_agent"
     && contractStateTools
-    && allowlist.includes(SEMANTIC_MATCH_TOOL)
-    ? createSemanticMatchTool({
+    && allowlist.includes(SEMANTIC_MATCH_BATCH_TOOL)
+    ? createSemanticMatchBatchTool({
       store: contractStateTools.store,
       runtime,
       modelId: request.model,
       sessionId: request.runId,
       cache: request.trustedRoute
         ? new TaxonomySemanticMatchCache({ runtimeData: request.dataDirectory, nodeId: request.trustedRoute.node_id, mode: "readWrite" })
-        : undefined,
+      : undefined,
       getActiveProductId: () => productTransaction.activeProductId,
-      onResolved: async (result: SemanticMatchToolResult) => {
-        if (!productTransaction.outstandingCandidateIds.has(String(result.candidate.id))) {
-          throw new Error(`semantic_match candidate '${String(result.candidate.id)}' was not returned by the current extract_product call.`);
+      onBeforeResolve: () => {
+        if (productTransaction.batchResolved) {
+          throw new Error("semantic_match_batch may be called at most once for each product.");
         }
-        productTransaction.outstandingCandidateIds.delete(String(result.candidate.id));
-        if (result.matched) {
-          productTransaction.complete = productTransaction.outstandingCandidateIds.size === 0;
-        } else {
-          productTransaction.awaitingPatchCandidateId = String(result.candidate.id);
-          productTransaction.complete = false;
-        }
+      },
+      onResolved: async (result: SemanticMatchBatchToolResult) => {
+        productTransaction.resolved(result);
       },
     })
     : undefined;
@@ -192,7 +181,7 @@ async function main(): Promise<void> {
     ...pythonTools,
     ...nativeToolSet.tools,
     ...(contractStateTools?.tools ?? []),
-    ...(semanticMatchTool ? [semanticMatchTool] : []),
+    ...(semanticMatchBatchTool ? [semanticMatchBatchTool] : []),
     ...(terminalOutputTool ? [terminalOutputTool] : []),
   ], tracing);
   agent = new Agent({

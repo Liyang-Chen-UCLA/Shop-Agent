@@ -246,6 +246,44 @@ test("framework contract state upserts, overwrites, moves, removes, and finalize
   assert.deepEqual(stateTools.store.finalized(), { criteria: [], attributes: [] });
 });
 
+test("patch_state prepares a stringified object item without weakening validation", async () => {
+  const itemSchemas = {
+    criterion: {
+      type: "object",
+      properties: { id: { type: "string" }, label: { type: "string" } },
+      required: ["id", "label"],
+      additionalProperties: false,
+    },
+    attribute: {
+      type: "object",
+      properties: { id: { type: "string" }, label: { type: "string" } },
+      required: ["id", "label"],
+      additionalProperties: false,
+    },
+  };
+  const stateTools = createContractStateTools({ itemSchemas });
+  const patch = stateTools.tools.find((tool) => tool.name === "patch_state")!;
+  const raw = { op: "upsert", kind: "criterion", item: JSON.stringify({ id: "A", label: "Alpha" }) };
+  assert.throws(() => stateTools.store.patch(raw), /patch_state arguments.*object|schema/);
+  const prepared = patch.prepareArguments!(raw);
+
+  await patch.execute("stringified", prepared);
+  assert.deepEqual(stateTools.store.get().criteria, [{ id: "A", label: "Alpha" }]);
+
+  const invalid = { op: "upsert", kind: "criterion", item: "{not-json" };
+  assert.deepEqual(patch.prepareArguments!(invalid), invalid);
+  await assert.rejects(
+    () => patch.execute("invalid-string", patch.prepareArguments!(invalid)),
+    /patch_state arguments.*object|schema/,
+  );
+  const arrayItem = { op: "upsert", kind: "criterion", item: "[]" };
+  assert.deepEqual(patch.prepareArguments!(arrayItem), arrayItem);
+  await assert.rejects(
+    () => patch.execute("array-string", patch.prepareArguments!(arrayItem)),
+    /patch_state arguments.*object|schema/,
+  );
+});
+
 test("Market runtime metadata is initialized, preserved across upserts and kind moves, and cannot be patched by the model", async () => {
   const config = {
     itemSchemas: {

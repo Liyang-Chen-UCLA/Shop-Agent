@@ -62,7 +62,7 @@ export const agents: AgentProfile[] = [
     description: "Maintains the canonical market contract while processing sampled Taobao OCR contexts one product at a time.",
     systemPrompt: { file: "./shop/prompts/market-agent.md" },
     skill: { file: "./shop/skills/market-alignment/SKILL.md" },
-    tools: ["shopping_env", "extract_product", "semantic_match", "get_state", "patch_state", "finalize_state", "web_search", "report_developer_issue"],
+    tools: ["shopping_env", "extract_product", "semantic_match_batch", "get_state", "patch_state", "finalize_state", "web_search", "report_developer_issue"],
     webSearchPolicy: "market",
     contractState: {
       itemSchemas: {

@@ -390,6 +390,15 @@ export function createContractStateTools(
       label: PATCH_STATE_TOOL,
       description: "Upsert one complete contract item or remove one item by its global id.",
       parameters: store.patchSchema,
+      prepareArguments(args) {
+        if (!isRecord(args) || args.op !== "upsert" || typeof args.item !== "string") return args as any;
+        try {
+          const item = JSON.parse(args.item) as unknown;
+          return isRecord(item) ? { ...args, item } as any : args as any;
+        } catch {
+          return args as any;
+        }
+      },
       executionMode: "sequential",
       async execute(_toolCallId, params) {
         return stateResult(PATCH_STATE_TOOL, store.patch(params));

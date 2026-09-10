@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { ModelDefinitionJudge } from "../eval/src/definition-judge.ts";
+import { ModelSemanticMatcher } from "../eval/src/semantic-matcher.ts";
 import { loadEvalCase, loadPredictionArtifacts } from "../eval/src/loaders.ts";
 import { fieldDiffs } from "../eval/src/metrics.ts";
 import { runEvaluation } from "../eval/src/pipeline.ts";
@@ -313,6 +314,25 @@ test("semantic matcher is injectable and its one-to-one pairings are used", asyn
   assert.equal(telemetry.semanticInputs.length, 1);
   assert.equal(result.pairings[0].method, "semantic");
   assert.equal(result.metrics.criteria_f1, 1);
+});
+
+test("Eval keeps SharedSemanticMatcher's default one-to-one semantic validation", async () => {
+  const { runtime } = fakeDefinitionRuntime(JSON.stringify({ pairs: [
+    { gold_ref: "criteria:first", pred_ref: "criteria:canonical" },
+    { gold_ref: "criteria:second", pred_ref: "criteria:canonical" },
+  ] }));
+  const matcher = new ModelSemanticMatcher(runtime, "matcher", "eval-session");
+
+  await assert.rejects(
+    () => matcher.match({
+      gold: [
+        { ref: "criteria:first", kind: "criteria", item: numeric("first", "第一维度") },
+        { ref: "criteria:second", kind: "criteria", item: numeric("second", "第二维度") },
+      ],
+      pred: [{ ref: "criteria:canonical", kind: "criteria", item: numeric("canonical", "标准维度") }],
+    }),
+    /one-to-one pairings/,
+  );
 });
 
 test("definition judge skips the LLM when rule fieldDiffs are empty", async () => {

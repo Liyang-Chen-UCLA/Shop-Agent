@@ -52,19 +52,19 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.equal(market?.thinking, undefined);
   assert.equal(market?.outputValidator, undefined);
   assert.equal(market?.outputSchema, undefined);
-  assert.deepEqual(market?.tools, ["shopping_env", "extract_product", "semantic_match", "get_state", "patch_state", "finalize_state", "web_search", "report_developer_issue"]);
+  assert.deepEqual(market?.tools, ["shopping_env", "extract_product", "semantic_match_batch", "get_state", "patch_state", "finalize_state", "web_search", "report_developer_issue"]);
   assert.ok(market?.contractState);
   assert.deepEqual(market?.contractState?.runtimeItemDefaults, { observed_product_ids: [] });
   assert.deepEqual(market?.contractState?.runtimeMutableFields, ["aliases", "observed_product_ids"]);
   assert.match(market?.systemPrompt ?? "", /one-product transaction/i);
   assert.match(market?.systemPrompt ?? "", /extract_product/);
-  assert.match(market?.systemPrompt ?? "", /semantic_match/);
+  assert.match(market?.systemPrompt ?? "", /semantic_match_batch/);
   assert.match(market?.systemPrompt ?? "", /call `finalize_state`/);
   assert.doesNotMatch(market?.systemPrompt ?? "", /submit the final structured result/);
   assert.doesNotMatch(composeSystemPrompt(market!), /submit_result/);
   assert.match(market?.skillPrompt ?? "", /Product transaction/);
   assert.match(market?.skillPrompt ?? "", /extract_product/);
-  assert.match(market?.skillPrompt ?? "", /semantic_match/);
+  assert.match(market?.skillPrompt ?? "", /semantic_match_batch/);
   assert.match(market?.skillPrompt ?? "", /finalize_state/);
   assert.doesNotMatch(market?.skillPrompt ?? "", /market_alignment|observed_product_count|web_evidence/);
   assert.doesNotMatch(composeSystemPrompt(market!), /submit_result/);
@@ -81,7 +81,8 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(shoppingOutput.properties?.dataset_category?.description ?? "", /extract_product/);
   assert.match(shoppingOutput.properties?.sample_index?.description ?? "", /sample_limit/);
   assert.ok(discoverNativeTools().has("extract_product"));
-  assert.ok(discoverNativeTools().has("semantic_match"));
+  assert.ok(discoverNativeTools().has("semantic_match_batch"));
+  assert.equal(discoverNativeTools().has("semantic_match"), false);
 });
 
 test("does not permit direct get or run delegation to the internal market stage", async () => {
