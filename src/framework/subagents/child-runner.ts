@@ -96,8 +96,8 @@ async function main(): Promise<void> {
         throw new Error("extract_product must use the OCR item_id returned by the current shopping_env transaction.");
       }
       const candidateIds = [
-        ...output.criteria.map((entry) => entry.item.id),
-        ...output.attributes.map((entry) => entry.item.id),
+        ...output.criteria.map((item) => item.id),
+        ...output.attributes.map((item) => item.id),
       ];
       productTransaction.activeProductId = input.item_id;
       productTransaction.outstandingCandidateIds = new Set(candidateIds);

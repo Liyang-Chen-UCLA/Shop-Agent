@@ -26,45 +26,54 @@ const zeroUsage = {
 };
 let responseSequence = 0;
 
-function validExtraction(ocrText: string, suffix: string) {
+function validExtraction(suffix: string) {
   return {
     criteria: [{
-      item: {
-        id: `battery_life_${suffix}`,
-        name: "续航时间",
-        description: "产品可持续使用的时间",
-        aliases: [],
-        type: "numeric",
-        units: ["小时"],
-        direction: { type: "larger_better" },
-      },
-      status: "observed",
-      values: [{
-        raw_value: "8 小时",
-        normalized_value: 8,
-        unit: "小时",
-        qualifier: null,
-        evidence: ocrText,
-        ocr_page_id: null,
-      }],
+      id: `battery_life_${suffix}`,
+      name: "续航时间",
+      description: "产品可持续使用的时间",
+      aliases: [],
+      type: "numeric",
+      units: ["小时"],
+      direction: { type: "larger_better" },
+    }, {
+      id: `waterproof_${suffix}`,
+      name: "防水",
+      description: "产品是否具备防水能力",
+      aliases: [],
+      type: "boolean",
+      direction: { type: "true_better" },
+    }, {
+      id: `color_${suffix}`,
+      name: "颜色",
+      description: "产品可选颜色",
+      aliases: [],
+      type: "categorical",
+      values: ["黑色"],
+      value_domain: "open",
+      direction: { type: "preferred_set", values: ["黑色"] },
     }],
     attributes: [{
-      item: {
-        id: `foldable_${suffix}`,
-        name: "折叠方式",
-        description: "产品是否支持折叠",
-        aliases: [],
-        type: "boolean",
-      },
-      status: "unparsed",
-      values: [{
-        raw_value: "可折叠",
-        normalized_value: null,
-        unit: null,
-        qualifier: null,
-        evidence: ocrText,
-        ocr_page_id: null,
-      }],
+      id: `weight_${suffix}`,
+      name: "重量",
+      description: "产品重量",
+      aliases: [],
+      type: "numeric",
+      units: ["千克"],
+    }, {
+      id: `foldable_${suffix}`,
+      name: "折叠方式",
+      description: "产品是否支持折叠",
+      aliases: [],
+      type: "boolean",
+    }, {
+      id: `finish_${suffix}`,
+      name: "表面处理",
+      description: "产品表面处理方式",
+      aliases: [],
+      type: "categorical",
+      values: ["磨砂"],
+      value_domain: "closed",
     }],
   };
 }
@@ -105,24 +114,28 @@ function toolCallStream(model: any, toolName: string, output: unknown) {
   return stream;
 }
 
-test("product extraction input/output schemas require complete detected entries and OCR evidence", () => {
+test("product extraction accepts complete canonical criteria and attributes", () => {
   assert.ok(discoverNativeTools().has("extract_product"));
   const ocrText = "商品A 续航 8 小时 可折叠";
   const input = { item_id: "sku-a", dataset_category: "设备", ocr_text: ocrText };
   assert.deepEqual(validateJsonSchema(extractProductInputSchema, input), { valid: true });
   assert.deepEqual(validateProductExtractionInput(input), input);
 
-  const output = validExtraction(ocrText, "a");
+  const output = validExtraction("a");
   assert.deepEqual(validateJsonSchema(productExtractionOutputSchema, output), { valid: true });
-  assert.deepEqual(validateProductExtraction(output, ocrText), output);
+  assert.deepEqual(validateProductExtraction(output), output);
 
-  const notMentioned = structuredClone(output) as any;
-  notMentioned.criteria[0].status = "not_mentioned";
-  assert.equal(validateJsonSchema(productExtractionOutputSchema, notMentioned).valid, false);
+  const duplicateId = structuredClone(output) as any;
+  duplicateId.attributes[0].id = duplicateId.criteria[0].id;
+  assert.throws(() => validateProductExtraction(duplicateId), /duplicate candidate id/);
 
-  const wrongEvidence = structuredClone(output) as any;
-  wrongEvidence.criteria[0].values[0].evidence = "not in this OCR";
-  assert.throws(() => validateProductExtraction(wrongEvidence, ocrText), /verbatim substring/);
+  const invalidCanonicalItem = structuredClone(output) as any;
+  delete invalidCanonicalItem.criteria[0].units;
+  assert.throws(() => validateProductExtraction(invalidCanonicalItem), /output schema/);
+
+  const emptyId = structuredClone(output) as any;
+  emptyId.attributes[0].id = "";
+  assert.throws(() => validateProductExtraction(emptyId), /id must be a non-empty string/);
 
   assert.throws(
     () => validateProductExtractionInput({ ...input, base: {} }),
@@ -141,7 +154,7 @@ test("extract_product creates independent contexts for different products and wr
     });
     const ocrText = contextText(context);
     const suffix = ocrText.includes("第一") ? "a" : "b";
-    return toolCallStream(model, context.tools?.[0]?.name ?? SUBMIT_PRODUCT_EXTRACTION_TOOL, validExtraction(ocrText, suffix));
+    return toolCallStream(model, context.tools?.[0]?.name ?? SUBMIT_PRODUCT_EXTRACTION_TOOL, validExtraction(suffix));
   };
 
   const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-extract-product-"));
@@ -167,34 +180,13 @@ test("extract_product creates independent contexts for different products and wr
 
     const firstOutput = JSON.parse((first.content[0] as { text: string }).text);
     const secondOutput = JSON.parse((second.content[0] as { text: string }).text);
-    assert.equal(firstOutput.criteria[0].item.id, "battery_life_a");
-    assert.equal(secondOutput.criteria[0].item.id, "battery_life_b");
+    assert.equal(firstOutput.criteria[0].id, "battery_life_a");
+    assert.equal(secondOutput.criteria[0].id, "battery_life_b");
+    assert.equal("item" in firstOutput.criteria[0], false);
     assert.equal((first.details as any).item_id, "sku-a");
     assert.equal((second.details as any).dataset_category, "设备");
     assert.deepEqual(await readdir(directory), []);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-});
-
-test("extract_product lets the isolated subagent correct an invalid extraction in a later round", async () => {
-  const runtime = createModelRuntime();
-  const model = runtime.getModel("hy3");
-  let requests = 0;
-  runtime.models.streamSimple = (_model, context) => {
-    requests += 1;
-    const ocrText = contextText(context);
-    const output = validExtraction(ocrText, "repair") as any;
-    if (requests === 1) output.criteria[0].values[0].evidence = "not in this OCR";
-    return toolCallStream(model, context.tools?.[0]?.name ?? SUBMIT_PRODUCT_EXTRACTION_TOOL, output);
-  };
-
-  const tool = createProductExtractorTool({ runtime, projectRoot });
-  const result = await tool.execute("extract-repair", {
-    item_id: "sku-repair",
-    dataset_category: "设备",
-    ocr_text: "商品 续航 8 小时 可折叠",
-  });
-  assert.equal(requests, 2);
-  assert.equal(JSON.parse((result.content[0] as { text: string }).text).criteria[0].item.id, "battery_life_repair");
 });

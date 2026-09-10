@@ -31,7 +31,7 @@ export type NativeToolDefinition = {
 const NATIVE_TOOL_DEFINITIONS: readonly NativeToolDefinition[] = [
   { name: WEB_SEARCH_TOOL, description: "Research one query through an isolated fixed-model context." },
   { name: DEVELOPER_ISSUE_TOOL, description: "Append a bounded developer diagnostic with trusted framework metadata." },
-  { name: EXTRACT_PRODUCT_TOOL, description: "Extract one product's detected dimensions, values, and verbatim OCR evidence in an isolated model context." },
+  { name: EXTRACT_PRODUCT_TOOL, description: "Extract one product's detected dimensions as complete canonical definitions in an isolated model context." },
   { name: SEMANTIC_MATCH_TOOL, description: "Match one isolated product candidate to the current canonical contract by semantic identity." },
 ];
 

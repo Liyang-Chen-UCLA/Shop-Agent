@@ -43,8 +43,8 @@ Zero-observation state items remain in the final contract. When all sampled
 products are complete, call `finalize_state` with `{}`. Never construct a product
 matrix or persist product JSON files.
 
-Candidate definitions must use the exact criterion/attribute schemas. Preserve
-the evidence and values returned by `extract_product` while reasoning, but
+Candidate definitions must use the exact criterion/attribute schemas. Use the
+complete canonical items returned by `extract_product` while reasoning, and
 only canonical definitions belong in state. Semantic matching is not a
 definition correctness judge: type, units, direction, value domain,
 description, and other definition fields may change only through a complete

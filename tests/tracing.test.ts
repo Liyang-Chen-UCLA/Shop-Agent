@@ -239,24 +239,13 @@ test("extract_product is one traced tool observation around its isolated model r
     const submitTool = context.tools?.[0];
     const output = {
       criteria: [{
-        item: {
-          id: "battery_life",
-          name: "续航时间",
-          description: "产品可持续使用的时间",
-          aliases: [],
-          type: "numeric",
-          units: ["小时"],
-          direction: { type: "larger_better" },
-        },
-        status: "observed",
-        values: [{
-          raw_value: "8 小时",
-          normalized_value: 8,
-          unit: "小时",
-          qualifier: null,
-          evidence: "商品 续航 8 小时",
-          ocr_page_id: null,
-        }],
+        id: "battery_life",
+        name: "续航时间",
+        description: "产品可持续使用的时间",
+        aliases: [],
+        type: "numeric",
+        units: ["小时"],
+        direction: { type: "larger_better" },
       }],
       attributes: [],
     };

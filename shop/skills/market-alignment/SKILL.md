@@ -9,7 +9,7 @@ requesting the next one.
 1. Call `shopping_env({})` and keep its `item_id` and full `ocr_text`.
 2. Immediately call `extract_product` with that OCR. The extractor is isolated
    from base state and previous products, so treat its candidates as fresh
-   definitions plus product evidence.
+   canonical definitions.
 3. For each returned criterion or attribute, call `semantic_match`.
 4. A matched candidate only updates trusted runtime identity metadata. An
    unmatched, valid candidate may be submitted with one complete
