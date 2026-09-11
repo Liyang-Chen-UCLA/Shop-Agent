@@ -137,11 +137,11 @@ test("delegate_agent uses resolved absolute paths for a subagent run", async () 
 
     const delegation = createDelegationTool(config.agents, manager, () => ({}), () => "regression-session");
     const result = await delegation.execute("delegate-regression", {
-      action: "run",
+      action: "delegate",
       agent: profile.id,
       task: "Return a short test result.",
     });
-    const runId = (result.details as { runId: string }).runId;
+    const runId = (result.details as { taskId: string }).taskId;
     const expectedRunDirectory = path.join(directory, "runs", runId);
 
     assert.equal(capturedRunDirectory, expectedRunDirectory);

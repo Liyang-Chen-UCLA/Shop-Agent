@@ -716,9 +716,10 @@ test("formats safe TUI summaries, run cards, and task state", () => {
     state: "completed",
     startedAt: "2026-08-29T00:00:00.000Z",
     endedAt: "2026-08-29T00:00:01.500Z",
+    execution: 1,
     events: [{
       timestamp: "2026-08-29T00:00:01.000Z",
-      attempt: 1,
+      execution: 1,
       type: "tool_start",
       tool: "taxonomy_search_nodes",
       args: { queries: ["手机"], api_key: "do-not-render" },
@@ -890,9 +891,10 @@ test("creates an interactive orchestrator with state tools and focused subagents
       "delegate_agent",
       "report_developer_issue",
     ]);
-    const result = await app.agent.state.tools[4].execute("list-call", { action: "list" });
-    const agents = JSON.parse((result.content[0] as { text: string }).text) as { id: string }[];
-    assert.deepEqual(agents.map((agent) => agent.id), ["route_agent", "research_agent", "delegate"]);
+    const delegation = app.agent.state.tools[4];
+    assert.match(delegation.description, /delegate\(agent, task\).*resume\(taskId\).*cancel\(taskId\)/);
+    assert.match(delegation.description, /route_agent.*research_agent.*delegate/);
+    assert.doesNotMatch(delegation.description, /market_agent:/);
 
     const state = await app.getTaskState();
     assert.deepEqual(state.tasks, []);

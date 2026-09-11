@@ -47,7 +47,8 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(routeAgent?.systemPrompt ?? "", /never copy `parent_id`, `level`/);
   const orchestrator = config.agents.find((agent) => agent.id === "orchestrator");
   assert.match(orchestrator?.systemPrompt ?? "", /exactly one research-agent delegation in that user turn/);
-  assert.match(orchestrator?.systemPrompt ?? "", /do not manually call `delegate_agent` for `research_agent` again in the same turn/);
+  assert.match(orchestrator?.systemPrompt ?? "", /framework never retries automatically/);
+  assert.match(orchestrator?.systemPrompt ?? "", /action `resume` with that same `taskId` or action `cancel`/);
   assert.equal(market?.webSearchPolicy, "market");
   assert.deepEqual(config.runtime.llm.agents.market_agent, {});
   assert.equal(market?.outputValidator, undefined);
@@ -85,15 +86,11 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.equal(discoverNativeTools().has("semantic_match"), false);
 });
 
-test("does not permit direct get or run delegation to the internal market stage", async () => {
+test("does not permit direct delegation to the internal market stage", async () => {
   const config = await loadConfig(cwd);
   const delegation = createDelegationTool(config.agents, {} as any, () => ({}));
   await assert.rejects(
-    () => delegation.execute("market-get", { action: "get", agent: "market_agent" }),
-    /internal stage/,
-  );
-  await assert.rejects(
-    () => delegation.execute("market-run", { action: "run", agent: "market_agent", task: "{}" }),
+    () => delegation.execute("market-delegate", { action: "delegate", agent: "market_agent", task: "{}" }),
     /internal stage/,
   );
 });

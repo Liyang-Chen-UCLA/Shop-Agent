@@ -56,15 +56,17 @@ function elapsed(startedAt: string, endedAt?: string): string {
 
 function stateIcon(state: RunSummary["state"]): string {
   if (state === "completed") return "✓";
-  if (state === "failed" || state === "aborted") return "✗";
+  if (state === "interrupted" || state === "cancelled") return "✗";
   return "◇";
 }
 
 function eventLine(event: RunEvent): string {
   if (event.type === "tool_start") return `◇ ${inline(event.tool)} args ${inline(event.args)}`;
   if (event.type === "tool_end") return `${event.isError ? "✗" : "✓"} ${inline(event.tool)} → ${inline(event.result)}`;
-  if (event.type === "retry") return `↻ ${escapeMarkdown(event.message ?? `Retry attempt ${event.attempt}`)}`;
-  if (event.type === "error") return `✗ ${escapeMarkdown(event.message ?? "Subagent failed")}`;
+  if (event.type === "resume") return `↻ ${escapeMarkdown(event.message ?? `Resume execution ${event.execution}`)}`;
+  if (event.type === "checkpoint") return `◇ ${escapeMarkdown(event.message ?? "Checkpoint saved")}`;
+  if (event.type === "cancel") return `✗ ${escapeMarkdown(event.message ?? "Subagent cancelled")}`;
+  if (event.type === "error") return `✗ ${escapeMarkdown(event.message ?? "Subagent interrupted")}`;
   if (event.type === "result") return "✓ Subagent completed";
   return `◇ ${escapeMarkdown(event.message ?? event.type)}`;
 }
@@ -74,7 +76,7 @@ export function summarizeValue(value: unknown, maxLength = 160): string {
 }
 
 export function renderRunCard(run: RunSummary & { events: RunEvent[] }): string {
-  const relevant = run.events.filter((event) => event.type !== "status" || event.state === "starting");
+  const relevant = run.events.filter((event) => event.type !== "status" || event.message?.startsWith("Starting"));
   const hidden = Math.max(0, relevant.length - CARD_EVENT_LIMIT);
   const visible = relevant.slice(-CARD_EVENT_LIMIT);
   const chain = [

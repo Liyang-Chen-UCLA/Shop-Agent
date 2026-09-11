@@ -19,7 +19,7 @@ import type { PythonExecutor } from "../python-executor.ts";
 import { DEVELOPER_ISSUE_TOOL, isNativeToolName, WEB_SEARCH_TOOL } from "../native-tools.ts";
 import { sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { emptyContractState, isContractStateToolName, validateContractState, type ContractState } from "../contract-state.ts";
-import type { ChildEvent, ChildRequest } from "./protocol.ts";
+import type { ChildEvent, ChildRequest, SubagentCheckpoint } from "./protocol.ts";
 import { NoopTracing, type TraceObservation, type Tracing } from "../tracing/index.ts";
 
 type AgentOverride = RuntimeLlmOverride;
@@ -37,10 +37,38 @@ export type RunOptions = {
 
 export type RunResult = { text: string; value?: unknown; runId: string };
 
+export type RecoverySummary = {
+  taskId: string;
+  status: "interrupted";
+  reason: string;
+  last_completed_activity: string;
+  current_activity: string;
+  resumable: boolean;
+};
+
+export type SubagentTaskResult =
+  | { taskId: string; status: "completed"; result: unknown }
+  | RecoverySummary
+  | { taskId: string; status: "cancelled" };
+
+type ManagedTask = {
+  detail: RunDetail;
+  sessionId: string;
+  requestedAgent: string;
+  override?: AgentOverride;
+  overrides?: Record<string, AgentOverride>;
+  checkpoint?: SubagentCheckpoint;
+  currentActivity: string;
+  lastCompletedActivity: string;
+};
+
+type ManagedRunOptions = RunOptions & { managed?: ManagedTask };
+
 const CHILD_RUNNER = fileURLToPath(new URL("./child-runner.ts", import.meta.url));
 
 export class SubagentManager {
   private readonly runs = new Map<string, RunDetail>();
+  private readonly tasks = new Map<string, ManagedTask>();
   private readonly children = new Set<ChildProcessWithoutNullStreams>();
   private readonly config: ResolvedConfig;
   private readonly toolDefinitions: Map<string, PythonToolDefinition>;
@@ -74,18 +102,26 @@ export class SubagentManager {
     return { ...run, events: run.events.map((event) => ({ ...event })) };
   }
 
-  async run(options: RunOptions): Promise<RunResult> {
+  async run(options: ManagedRunOptions): Promise<RunResult> {
     if (options.profile.id === "research_agent") {
       return this.runCriteriaAndMarket(options);
     }
     return this.runSingle(options);
   }
 
-  private async runSingle(options: RunOptions): Promise<RunResult> {
+  private async runSingle(options: ManagedRunOptions): Promise<RunResult> {
     const name = options.profile.id.replaceAll("_", "-");
     return this.tracing.withObservation(name, "agent", {
-      input: options.task,
-      metadata: { agent: options.profile.id },
+      input: options.managed && options.managed.detail.execution > 1
+        ? { resumed: true, lastCompletedActivity: options.managed.lastCompletedActivity }
+        : options.task,
+      metadata: {
+        taskId: options.managed?.detail.id,
+        subagentType: options.profile.id,
+        executionId: options.managed?.detail.executionId,
+        execution: options.managed?.detail.execution,
+        status: "running",
+      },
     }, async (observation) => {
       const result = await this.runSingleObserved(options, observation);
       if (options.profile.contractState) {
@@ -97,26 +133,149 @@ export class SubagentManager {
     });
   }
 
-  private async runSingleObserved(options: RunOptions, observation?: TraceObservation): Promise<RunResult> {
-    const runId = randomUUID();
-    const sessionId = options.sessionId ?? runId;
+  async delegate(options: RunOptions): Promise<SubagentTaskResult> {
+    const taskId = randomUUID();
+    const detail: RunDetail = {
+      id: taskId,
+      agent: options.profile.id,
+      task: options.task,
+      state: "running",
+      startedAt: new Date().toISOString(),
+      execution: 0,
+      stageAgent: options.profile.id,
+      model: "",
+      thinking: "off",
+      events: [],
+    };
+    const task: ManagedTask = {
+      detail,
+      sessionId: options.sessionId ?? taskId,
+      requestedAgent: options.profile.id,
+      override: options.override,
+      overrides: options.overrides,
+      currentActivity: "Starting subagent",
+      lastCompletedActivity: "Task initialized",
+    };
+    this.tasks.set(taskId, task);
+    this.runs.set(taskId, detail);
+    await mkdir(this.runDirectory(taskId), { recursive: true });
+    await this.saveTask(task);
+    return this.executeManaged(task, options.signal, options.onUpdate);
+  }
+
+  async resume(taskId: string, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback): Promise<SubagentTaskResult> {
+    const task = await this.loadTask(taskId);
+    if (task.detail.state === "completed") throw new Error(`Subagent task '${taskId}' is completed and cannot be resumed.`);
+    if (task.detail.state === "cancelled") throw new Error(`Subagent task '${taskId}' is cancelled and cannot be resumed.`);
+    if (task.detail.state !== "interrupted") throw new Error(`Subagent task '${taskId}' is ${task.detail.state} and cannot be resumed.`);
+    if (!task.detail.resumable) throw new Error(`Subagent task '${taskId}' is not resumable.`);
+    this.recordEvent(task.detail, this.runDirectory(taskId), {
+      timestamp: new Date().toISOString(), execution: task.detail.execution + 1, type: "resume", state: "running", message: "Resuming interrupted subagent task",
+    }, onUpdate);
+    return this.executeManaged(task, signal, onUpdate);
+  }
+
+  async cancel(taskId: string, onUpdate?: AgentToolUpdateCallback): Promise<SubagentTaskResult> {
+    const task = await this.loadTask(taskId);
+    if (task.detail.state === "completed") throw new Error(`Subagent task '${taskId}' is completed and cannot be cancelled.`);
+    if (task.detail.state === "cancelled") return { taskId, status: "cancelled" };
+    if (task.detail.state === "running") throw new Error(`Subagent task '${taskId}' is running and cannot be cancelled from the serial orchestrator.`);
+    task.detail.state = "cancelled";
+    task.detail.resumable = false;
+    task.detail.reason = undefined;
+    task.detail.endedAt = new Date().toISOString();
+    this.recordEvent(task.detail, this.runDirectory(taskId), {
+      timestamp: task.detail.endedAt, execution: task.detail.execution, type: "cancel", state: "cancelled", message: "Subagent task cancelled",
+    }, onUpdate);
+    await this.saveTask(task);
+    await this.tracing.withObservation("cancel-subagent", "span", {
+      input: { taskId }, output: { status: "cancelled" },
+      metadata: { taskId, subagentType: task.detail.stageAgent ?? task.requestedAgent, execution: task.detail.execution, status: "cancelled" },
+    }, async () => undefined, task.sessionId);
+    return { taskId, status: "cancelled" };
+  }
+
+  private async executeManaged(task: ManagedTask, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback): Promise<SubagentTaskResult> {
+    const profile = this.config.agents.find((item) => item.id === task.requestedAgent);
+    if (!profile) throw new Error(`Subagent task '${task.detail.id}' references unknown agent '${task.requestedAgent}'.`);
+    task.detail.execution += 1;
+    task.detail.executionId = randomUUID();
+    task.detail.state = "running";
+    task.detail.endedAt = undefined;
+    task.detail.error = undefined;
+    task.detail.reason = undefined;
+    task.detail.resumable = undefined;
+    await this.saveTask(task);
+    try {
+      const result = await this.run({
+        profile,
+        task: task.detail.task,
+        sessionId: task.sessionId,
+        signal,
+        onUpdate,
+        override: task.override,
+        overrides: task.overrides,
+        managed: task,
+      } as ManagedRunOptions);
+      task.detail.state = "completed";
+      task.detail.endedAt = new Date().toISOString();
+      task.detail.output = result.text;
+      task.detail.value = result.value;
+      task.detail.resumable = false;
+      this.recordEvent(task.detail, this.runDirectory(task.detail.id), {
+        timestamp: task.detail.endedAt, execution: task.detail.execution, type: "result", state: "completed", message: "Subagent task completed",
+      }, onUpdate);
+      await this.saveTask(task);
+      return { taskId: task.detail.id, status: "completed", result: result.value ?? result.text };
+    } catch (error) {
+      const reason = this.interruptionReason(error, signal);
+      task.detail.state = "interrupted";
+      task.detail.endedAt = new Date().toISOString();
+      task.detail.error = error instanceof Error ? error.message : String(error);
+      task.detail.reason = reason;
+      task.detail.resumable = reason !== "invalid_task";
+      this.recordEvent(task.detail, this.runDirectory(task.detail.id), {
+        timestamp: task.detail.endedAt, execution: task.detail.execution, type: "error", state: "interrupted", message: task.detail.error,
+      }, onUpdate);
+      await this.saveTask(task);
+      return {
+        taskId: task.detail.id,
+        status: "interrupted",
+        reason,
+        last_completed_activity: task.lastCompletedActivity,
+        current_activity: task.currentActivity,
+        resumable: Boolean(task.detail.resumable),
+      };
+    }
+  }
+
+  private async runSingleObserved(options: ManagedRunOptions, observation?: TraceObservation): Promise<RunResult> {
+    const managed = options.managed;
+    const taskId = managed?.detail.id ?? randomUUID();
+    const runId = managed?.detail.executionId ?? taskId;
+    const sessionId = options.sessionId ?? taskId;
     const llm = resolveAgentLlm(
       this.config.runtime,
       options.profile.id,
       options.override ?? options.overrides?.[options.profile.id],
     );
-    const detail: RunDetail = {
-      id: runId,
+    const detail: RunDetail = managed?.detail ?? {
+      id: taskId,
       agent: options.profile.id,
       task: options.task,
-      state: "starting",
+      state: "running",
       startedAt: new Date().toISOString(),
+      execution: 1,
       model: llm.model,
       thinking: llm.thinking,
       events: [],
     };
-    this.runs.set(runId, detail);
-    const runDirectory = path.join(this.config.dataDirectory, "runs", runId);
+    const resumeCheckpoint = managed?.detail.stageAgent === options.profile.id ? managed.checkpoint : undefined;
+    detail.model = llm.model;
+    detail.thinking = llm.thinking;
+    detail.stageAgent = options.profile.id;
+    this.runs.set(taskId, detail);
+    const runDirectory = this.runDirectory(taskId);
     await mkdir(runDirectory, { recursive: true });
     await this.saveSummary(runDirectory, detail);
 
@@ -131,6 +290,7 @@ export class SubagentManager {
       ? await this.initialContractState(options.profile, sessionId, options.task)
       : undefined;
     const request: ChildRequest = {
+      taskId,
       runId,
       sessionId,
       projectRoot: this.config.cwd,
@@ -145,44 +305,46 @@ export class SubagentManager {
       tools,
       contractState,
       trustedRoute: this.routeFromTask(options.task),
-      attempt: 1,
+      execution: detail.execution,
+      checkpoint: resumeCheckpoint,
       traceContext: this.tracing.context(sessionId),
     };
-
-    const attempts = Math.max(1, (options.profile.maxRetries ?? 0) + 1);
-    let lastError: unknown;
-    let lastAttempt = 1;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      lastAttempt = attempt;
-      try {
-        const result = await this.runAttempt({ ...request, attempt }, runDirectory, detail, attempt, options.signal, options.onUpdate);
-        observation?.update({ output: result.value ?? result.text, metadata: { agent: options.profile.id, runId, attempts: attempt, outcome: "success" } });
-        return result;
-      } catch (error) {
-        lastError = error;
-        if (options.signal?.aborted || attempt === attempts) break;
-        this.recordEvent(detail, runDirectory, {
-          timestamp: new Date().toISOString(),
-          attempt: attempt + 1,
-          type: "retry",
-          message: `Retrying ${options.profile.id} (attempt ${attempt + 1})`,
-        }, options.onUpdate);
+    try {
+      const result = await this.runAttempt(request, runDirectory, detail, detail.execution, options.signal, options.onUpdate, managed);
+      if (managed) {
+        managed.checkpoint = undefined;
+        managed.lastCompletedActivity = `Completed ${options.profile.id}`;
+        managed.currentActivity = managed.lastCompletedActivity;
+        await this.saveTask(managed);
       }
+      observation?.update({
+        output: result.value ?? result.text,
+        metadata: {
+          taskId,
+          subagentType: options.profile.id,
+          executionId: runId,
+          execution: detail.execution,
+          status: "completed",
+          resumed: Boolean(managed && detail.execution > 1),
+        },
+      });
+      return result;
+    } catch (error) {
+      observation?.fail?.(error, Boolean(options.signal?.aborted));
+      observation?.update({
+        output: { error: error instanceof Error ? error.message : String(error) },
+        metadata: {
+          taskId,
+          subagentType: options.profile.id,
+          executionId: runId,
+          execution: detail.execution,
+          status: "interrupted",
+          reason: this.interruptionReason(error, options.signal),
+          resumed: Boolean(managed && detail.execution > 1),
+        },
+      });
+      throw error;
     }
-    detail.state = options.signal?.aborted ? "aborted" : "failed";
-    detail.endedAt = new Date().toISOString();
-    detail.error = lastError instanceof Error ? lastError.message : String(lastError);
-    this.recordEvent(detail, runDirectory, {
-      timestamp: detail.endedAt,
-      attempt: lastAttempt,
-      type: "error",
-      state: detail.state,
-      message: detail.error,
-    }, options.onUpdate);
-    await this.saveSummary(runDirectory, detail);
-    observation?.fail?.(lastError, Boolean(options.signal?.aborted));
-    observation?.update({ output: { error: detail.error }, metadata: { agent: options.profile.id, runId, attempts: lastAttempt, outcome: detail.state } });
-    throw lastError;
   }
 
   private routeFromTask(task: string): { node_id: string; node_name: string; node_path: string } | undefined {
@@ -246,7 +408,7 @@ export class SubagentManager {
     return JSON.stringify(route);
   }
 
-  private async runCriteriaAndMarket(options: RunOptions): Promise<RunResult> {
+  private async runCriteriaAndMarket(options: ManagedRunOptions): Promise<RunResult> {
     return this.tracing.withObservation("build-market-criteria", "chain", {
       input: options.task,
     }, async (chain) => {
@@ -334,9 +496,10 @@ export class SubagentManager {
     request: ChildRequest,
     runDirectory: string,
     detail: RunDetail,
-    attempt: number,
+    execution: number,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback,
+    managed?: ManagedTask,
   ): Promise<RunResult> {
     const child = spawn(process.execPath, [CHILD_RUNNER], {
       cwd: this.config.cwd,
@@ -354,6 +517,7 @@ export class SubagentManager {
     let reportedReasoning = false;
     let reportedWriting = false;
     const pythonRequests = new Map<string, AbortController>();
+    let checkpointWrite = Promise.resolve();
 
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
     const timeoutMs = resolveSubagentTimeout(this.config.runtime, request.profile);
@@ -379,35 +543,48 @@ export class SubagentManager {
         try {
           const event = JSON.parse(line) as ChildEvent;
           if (event.type === "status") {
-            detail.state = event.state;
+            detail.state = "running";
+            if (managed) managed.currentActivity = event.message;
             this.recordEvent(detail, runDirectory, {
-              timestamp: new Date().toISOString(), attempt, type: "status", state: event.state, message: event.message,
+              timestamp: new Date().toISOString(), execution, type: "status", state: "running", message: event.message,
             }, onUpdate);
           } else if (event.type === "thinking_delta" && !reportedReasoning) {
             reportedReasoning = true;
             this.recordEvent(detail, runDirectory, {
-              timestamp: new Date().toISOString(), attempt, type: "reasoning", state: "running", message: "Analyzing task",
+              timestamp: new Date().toISOString(), execution, type: "reasoning", state: "running", message: "Analyzing task",
             }, onUpdate);
           } else if (event.type === "text_delta") {
             if (!reportedWriting) {
               reportedWriting = true;
               this.recordEvent(detail, runDirectory, {
-                timestamp: new Date().toISOString(), attempt, type: "writing", state: "running", message: "Writing response",
+                timestamp: new Date().toISOString(), execution, type: "writing", state: "running", message: "Writing response",
               }, onUpdate);
             }
           } else if (event.type === "tool_start") {
             if (event.name === DEVELOPER_ISSUE_TOOL) continue;
+            if (managed) managed.currentActivity = `Running ${event.name}`;
             this.recordEvent(detail, runDirectory, {
-              timestamp: new Date().toISOString(), attempt, type: "tool_start", state: "running", tool: event.name, args: event.args,
+              timestamp: new Date().toISOString(), execution, type: "tool_start", state: "running", tool: event.name, args: event.args,
             }, onUpdate);
           } else if (event.type === "tool_end") {
             if (event.name === DEVELOPER_ISSUE_TOOL) continue;
+            if (managed) managed.currentActivity = event.isError ? `${event.name} failed` : "Committing completed turn";
             const result = event.name === WEB_SEARCH_TOOL
               ? (event.isError ? "web_search failed" : "web_search completed")
               : event.result;
             this.recordEvent(detail, runDirectory, {
-              timestamp: new Date().toISOString(), attempt, type: "tool_end", state: "running", tool: event.name,
+              timestamp: new Date().toISOString(), execution, type: "tool_end", state: "running", tool: event.name,
               result, isError: event.isError,
+            }, onUpdate);
+          } else if (event.type === "checkpoint") {
+            if (managed) {
+              managed.checkpoint = event.checkpoint;
+              managed.lastCompletedActivity = event.checkpoint.lastCompletedActivity;
+              managed.currentActivity = `Continuing after ${event.checkpoint.lastCompletedActivity}`;
+              checkpointWrite = checkpointWrite.then(() => this.saveCheckpoint(managed));
+            }
+            this.recordEvent(detail, runDirectory, {
+              timestamp: new Date().toISOString(), execution, type: "checkpoint", state: "running", message: event.checkpoint.lastCompletedActivity,
             }, onUpdate);
           } else if (event.type === "python_request") {
             const controller = new AbortController();
@@ -427,7 +604,7 @@ export class SubagentManager {
           } else if (event.type === "error") {
             childError = event.message;
             this.recordEvent(detail, runDirectory, {
-              timestamp: new Date().toISOString(), attempt, type: "error", message: `Attempt ${attempt} failed: ${event.message}`,
+              timestamp: new Date().toISOString(), execution, type: "error", message: `Execution ${execution} failed: ${event.message}`,
             }, onUpdate);
           }
         } catch (error) {
@@ -447,6 +624,7 @@ export class SubagentManager {
       if (stopTimer) clearTimeout(stopTimer);
       signal?.removeEventListener("abort", abort);
     });
+    await checkpointWrite;
 
     if (signal?.aborted) throw new Error(`Subagent '${request.profile.id}' was aborted.`);
     if (timedOut) throw new Error(`Subagent '${request.profile.id}' timed out after ${timeoutMs}ms.`);
@@ -461,12 +639,15 @@ export class SubagentManager {
       "utf8",
     );
     await writeFile(path.join(runDirectory, "output.md"), finalResult.text, "utf8");
-    detail.state = "completed";
-    detail.endedAt = new Date().toISOString();
-    detail.output = finalResult.text;
-    detail.value = finalResult.value;
+    detail.state = managed ? "running" : "completed";
+    if (!managed) {
+      detail.endedAt = new Date().toISOString();
+      detail.output = finalResult.text;
+      detail.value = finalResult.value;
+    }
     this.recordEvent(detail, runDirectory, {
-      timestamp: detail.endedAt, attempt, type: "result", state: "completed", message: "Subagent completed",
+      timestamp: new Date().toISOString(), execution, type: "result", state: detail.state,
+      message: managed ? `${request.profile.id} stage completed` : "Subagent completed",
     }, onUpdate);
     await this.saveSummary(runDirectory, detail);
     return { text: finalResult.text, value: finalResult.value, runId: request.runId };
@@ -535,6 +716,7 @@ export class SubagentManager {
     void this.appendEvent(runDirectory, event);
     const details: SubagentUpdateDetails = {
       kind: "subagent",
+      taskId: detail.id,
       runId: detail.id,
       agent: detail.agent,
       task: detail.task,
@@ -550,6 +732,102 @@ export class SubagentManager {
   private async saveSummary(runDirectory: string, detail: RunDetail): Promise<void> {
     const { events: _events, output: _output, value: _value, model: _model, thinking: _thinking, ...summary } = detail;
     await writeFile(path.join(runDirectory, "status.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  }
+
+  private runDirectory(taskId: string): string {
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(taskId)) throw new Error(`Invalid subagent task id: ${taskId}`);
+    return path.join(this.config.dataDirectory, "runs", taskId);
+  }
+
+  private async saveTask(task: ManagedTask): Promise<void> {
+    const directory = this.runDirectory(task.detail.id);
+    await mkdir(directory, { recursive: true });
+    await Promise.all([
+      this.saveSummary(directory, task.detail),
+      writeFile(path.join(directory, "task.json"), `${JSON.stringify({
+        version: 1,
+        taskId: task.detail.id,
+        sessionId: task.sessionId,
+        requestedAgent: task.requestedAgent,
+        override: task.override,
+        overrides: task.overrides,
+        currentActivity: task.currentActivity,
+        lastCompletedActivity: task.lastCompletedActivity,
+        model: task.detail.model,
+        thinking: task.detail.thinking,
+        hasCheckpoint: Boolean(task.checkpoint),
+      }, null, 2)}\n`, "utf8"),
+    ]);
+    if (task.checkpoint) await this.saveCheckpoint(task, false);
+  }
+
+  private async saveCheckpoint(task: ManagedTask, updateSpec = true): Promise<void> {
+    if (!task.checkpoint) return;
+    const directory = this.runDirectory(task.detail.id);
+    await writeFile(path.join(directory, "checkpoint.json"), `${JSON.stringify(task.checkpoint)}\n`, "utf8");
+    if (updateSpec) await this.saveTask(task);
+  }
+
+  private async loadTask(taskId: string): Promise<ManagedTask> {
+    const existing = this.tasks.get(taskId);
+    if (existing) return existing;
+    const directory = this.runDirectory(taskId);
+    let spec: any;
+    let detail: RunDetail;
+    try {
+      spec = JSON.parse(await readFile(path.join(directory, "task.json"), "utf8"));
+      detail = JSON.parse(await readFile(path.join(directory, "status.json"), "utf8")) as RunDetail;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`Unknown subagent task: ${taskId}`);
+      throw new Error(`Subagent task '${taskId}' has invalid persisted state: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (spec?.version !== 1 || spec.taskId !== taskId || typeof spec.requestedAgent !== "string" || typeof spec.sessionId !== "string") {
+      throw new Error(`Subagent task '${taskId}' has invalid persisted metadata.`);
+    }
+    let events: RunEvent[] = [];
+    try {
+      events = (await readFile(path.join(directory, "events.jsonl"), "utf8"))
+        .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as RunEvent);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    let checkpoint: SubagentCheckpoint | undefined;
+    if (spec.hasCheckpoint) checkpoint = JSON.parse(await readFile(path.join(directory, "checkpoint.json"), "utf8")) as SubagentCheckpoint;
+    detail.events = events;
+    detail.model = spec.model ?? "";
+    detail.thinking = spec.thinking ?? "off";
+    const task: ManagedTask = {
+      detail,
+      sessionId: spec.sessionId,
+      requestedAgent: spec.requestedAgent,
+      override: spec.override,
+      overrides: spec.overrides,
+      checkpoint,
+      currentActivity: spec.currentActivity ?? "Interrupted",
+      lastCompletedActivity: spec.lastCompletedActivity ?? "Task initialized",
+    };
+    const staleRunning = detail.state === "running";
+    if (staleRunning) {
+      detail.state = "interrupted";
+      detail.endedAt = new Date().toISOString();
+      detail.error = "The previous application process ended while this subagent task was running.";
+      detail.reason = "process_error";
+      detail.resumable = true;
+      task.currentActivity = spec.currentActivity ?? "Previous execution stopped unexpectedly";
+    }
+    this.tasks.set(taskId, task);
+    this.runs.set(taskId, detail);
+    if (staleRunning) await this.saveTask(task);
+    return task;
+  }
+
+  private interruptionReason(error: unknown, signal?: AbortSignal): string {
+    const message = error instanceof Error ? error.message : String(error);
+    if (signal?.aborted || /aborted/i.test(message)) return "aborted";
+    if (/timed out|timeout/i.test(message)) return "execution_timeout";
+    if (/exited with code|invalid child event|EPIPE|spawn/i.test(message)) return "process_error";
+    if (/unknown agent|unknown tool|invalid persisted|requires a trusted|invalid task/i.test(message)) return "invalid_task";
+    return "provider_error";
   }
 
   private terminate(child: ChildProcessWithoutNullStreams): void {

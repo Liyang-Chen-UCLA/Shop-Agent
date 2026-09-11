@@ -39,7 +39,6 @@ export const agents: AgentProfile[] = [
       required: ["results"],
       additionalProperties: false,
     },
-    maxRetries: 1,
   },
   {
     id: "research_agent",
@@ -54,7 +53,6 @@ export const agents: AgentProfile[] = [
       },
     },
     timeoutMs: 600_000,
-    maxRetries: 0,
   },
   {
     id: "market_agent",
@@ -73,7 +71,6 @@ export const agents: AgentProfile[] = [
       runtimeItemDefaults: { observed_product_ids: [] },
       runtimeMutableFields: ["aliases", "observed_product_ids"],
     },
-    maxRetries: 0,
   },
   {
     id: "delegate",
@@ -81,6 +78,5 @@ export const agents: AgentProfile[] = [
     description: "A general, tool-free subagent for a single bounded task.",
     systemPrompt: { file: "./shop/prompts/delegate.md" },
     tools: [],
-    maxRetries: 0,
   },
 ];

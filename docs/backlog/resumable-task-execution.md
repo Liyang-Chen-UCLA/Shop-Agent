@@ -1,32 +1,17 @@
-# Resumable task execution
+# Resumable task execution (delivered)
 
-## Current design
+The foreground Subagent Resume MVP is implemented. Operational state remains separate from the canonical product-analysis task schema.
 
-LangGraph checkpoints persist only canonical product-analysis task state. Tasks intentionally contain no execution lifecycle status or graph-control state. A restored transcript is sufficient to reconstruct confirmations that happen between completed conversation turns, but it cannot identify or resume work interrupted during a tool or agent call.
-
-## Target design
-
-Add durable graph-control state and an explicit task execution lifecycle:
+The orchestrator API is limited to:
 
 ```text
-pending | running | completed | failed
+delegate(agent, task)
+resume(taskId)
+cancel(taskId)
 ```
 
-Persist the current graph step, pending confirmation, invocation identity, and enough validated input to resume or safely retry an interrupted operation without duplicating completed work. Keep these operational fields separate from product, preference, and taxonomy route data.
+A logical task uses `running | completed | interrupted | cancelled`. Each resume keeps the same `taskId`, creates a new execution, restores the last fully committed child turn, and re-executes work after that checkpoint. There is no automatic retry, inspect, steer, heartbeat, background execution, or parallel dispatch.
 
-## Why deferred
+Langfuse represents each actual Subagent execution as an `agent` observation and records stable `taskId`, Subagent type, execution identity/number, lifecycle outcome, interruption reason, resume/cancel, and final output. The session ID groups executions with their owning Shop Agent conversation.
 
-The current foreground, single-request tool protocol has no LangGraph interrupt/resume or streaming checkpoint contract. Canonical shopping state and taxonomy routing can be delivered without first replacing that protocol.
-
-## Migration trigger
-
-Users need reliable recovery from process termination during routing or delegated analysis, background task execution is introduced, or retries can cause duplicate external actions.
-
-## Acceptance criteria
-
-- Every executing task transitions through validated `pending`, `running`, `completed`, or `failed` states.
-- Restarting the application can distinguish an unanswered conversational confirmation from an interrupted operation.
-- Interrupted read-only work can resume or retry without losing canonical task state.
-- Potentially mutating work uses an invocation identity so completed actions are not duplicated.
-- Operational state remains separate from the minimal product-analysis task schema.
-- Old checkpoints without execution fields migrate safely.
+Mutation deduplication remains deferred. The MVP can repeat a side-effecting tool call that was not part of the last fully committed checkpoint.

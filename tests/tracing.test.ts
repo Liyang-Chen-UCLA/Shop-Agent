@@ -181,7 +181,7 @@ test("traces every real model request without uploading thinking", async () => {
   assert.equal(generation.ended, true);
 });
 
-test("delegate_agent run is represented only by its agent while list/get remain tools", async () => {
+test("delegate_agent lifecycle actions are not double-represented as wrapper tools", async () => {
   const tracing = new RecordingTracing();
   const calls: string[] = [];
   const delegate = {
@@ -194,14 +194,15 @@ test("delegate_agent run is represented only by its agent while list/get remain 
   } as any;
   const [tool, ordinaryTool] = traceTools([delegate, ordinary], tracing);
   await tracing.withObservation("shop-turn", "agent", {}, async () => {
-    await tool.execute("list", { action: "list" });
-    await tool.execute("run", { action: "run" });
+    await tool.execute("delegate", { action: "delegate" });
+    await tool.execute("resume", { action: "resume" });
+    await tool.execute("cancel", { action: "cancel" });
     await ordinaryTool.execute("ordinary", { node_ids: ["267"] });
   });
-  assert.deepEqual(calls, ["list", "run"]);
+  assert.deepEqual(calls, ["delegate", "resume", "cancel"]);
   const root = tracing.records[0];
   const tools = tracing.records.filter((record) => record.type === "tool");
-  assert.deepEqual(tools.map((record) => record.name), ["delegate-agent", "taxonomy-get-nodes"]);
+  assert.deepEqual(tools.map((record) => record.name), ["taxonomy-get-nodes"]);
   assert.ok(tools.every((record) => record.parentSpanId === root.spanId));
 });
 
@@ -366,27 +367,72 @@ test("model abort is distinct from an exporter or provider error", async () => {
   assert.deepEqual(generation.failures.map((failure) => failure.aborted), [true]);
 });
 
-test("subagent retry uses one logical agent and passes one trace to every attempt", async () => {
+test("subagent execution never retries automatically", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-tracing-retry-"));
   try {
     const config = await loadConfig(path.resolve(import.meta.dirname, ".."), undefined, { paths: { runtimeData: directory } });
     const tracing = new RecordingTracing();
     const manager = new SubagentManager(config, new Map(), undefined, tracing);
-    const profile = { ...config.agents.find((item) => item.id === "delegate")!, maxRetries: 1 };
-    const requests: Array<{ attempt: number; traceContext?: TraceContext }> = [];
+    const profile = { ...config.agents.find((item) => item.id === "delegate")!, maxRetries: 3 };
+    const requests: Array<{ execution: number; traceContext?: TraceContext }> = [];
     (manager as any).runAttempt = async (request: any) => {
-      requests.push({ attempt: request.attempt, traceContext: request.traceContext });
-      if (request.attempt === 1) throw new Error("retry me");
-      return { text: "done", runId: request.runId };
+      requests.push({ execution: request.execution, traceContext: request.traceContext });
+      throw new Error("do not retry me");
     };
-    await tracing.withObservation("shop-turn", "agent", {}, () => manager.run({ profile, task: "work", sessionId: "session-a" }), "session-a");
+    await assert.rejects(
+      tracing.withObservation("shop-turn", "agent", {}, () => manager.run({ profile, task: "work", sessionId: "session-a" }), "session-a"),
+      /do not retry me/,
+    );
 
     const agents = tracing.records.filter((record) => record.type === "agent" && record.name === "delegate");
     assert.equal(agents.length, 1);
-    assert.deepEqual(requests.map((request) => request.attempt), [1, 2]);
+    assert.deepEqual(requests.map((request) => request.execution), [1]);
     assert.ok(requests.every((request) => request.traceContext?.traceId === agents[0].traceId));
     assert.ok(requests.every((request) => request.traceContext?.parentSpanId === agents[0].spanId));
     assert.ok(requests.every((request) => request.traceContext?.sessionId === "session-a"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("subagent recovery traces correlate task, execution, status, reason, resume, and result", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-tracing-resume-"));
+  try {
+    const config = await loadConfig(path.resolve(import.meta.dirname, ".."), undefined, { paths: { runtimeData: directory } });
+    const tracing = new RecordingTracing();
+    const manager = new SubagentManager(config, new Map(), undefined, tracing);
+    const profile = config.agents.find((item) => item.id === "delegate")!;
+    let calls = 0;
+    (manager as any).runAttempt = async (request: any) => {
+      calls += 1;
+      if (calls === 1) throw new Error("provider disconnected");
+      return { text: "recovered", value: { ok: true }, runId: request.runId };
+    };
+
+    const interrupted = await tracing.withObservation("shop-turn", "agent", {}, () => manager.delegate({
+      profile, task: "work", sessionId: "session-a",
+    }), "session-a");
+    assert.equal(interrupted.status, "interrupted");
+    await tracing.withObservation("shop-turn", "agent", {}, () => manager.resume(interrupted.taskId), "session-a");
+
+    const executions = tracing.records.filter((record) => record.name === "delegate" && record.type === "agent");
+    assert.equal(executions.length, 2);
+    assert.deepEqual(executions.map((record) => (record.attributes.metadata as any).taskId), [interrupted.taskId, interrupted.taskId]);
+    assert.deepEqual(executions.map((record) => (record.attributes.metadata as any).execution), [1, 2]);
+    assert.deepEqual(executions.map((record) => (record.attributes.metadata as any).status), ["interrupted", "completed"]);
+    assert.equal((executions[0].attributes.metadata as any).reason, "provider_error");
+    assert.equal((executions[1].attributes.metadata as any).resumed, true);
+    assert.deepEqual(executions[1].attributes.output, { ok: true });
+
+    (manager as any).runAttempt = async () => { throw new Error("provider unavailable"); };
+    const toCancel = await tracing.withObservation("shop-turn", "agent", {}, () => manager.delegate({
+      profile, task: "cancel me", sessionId: "session-a",
+    }), "session-a");
+    await tracing.withObservation("shop-turn", "agent", {}, () => manager.cancel(toCancel.taskId), "session-a");
+    const cancellation = tracing.records.find((record) => record.name === "cancel-subagent");
+    assert.equal(cancellation?.type, "span");
+    assert.equal((cancellation?.attributes.metadata as any).taskId, toCancel.taskId);
+    assert.equal((cancellation?.attributes.metadata as any).status, "cancelled");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

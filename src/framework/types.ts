@@ -187,16 +187,21 @@ export type RunSummary = {
   id: string;
   agent: string;
   task: string;
-  state: "starting" | "running" | "completed" | "failed" | "aborted";
+  state: "running" | "completed" | "interrupted" | "cancelled";
   startedAt: string;
   endedAt?: string;
   error?: string;
+  reason?: string;
+  execution: number;
+  executionId?: string;
+  stageAgent?: string;
+  resumable?: boolean;
 };
 
 export type RunEvent = {
   timestamp: string;
-  attempt: number;
-  type: "status" | "reasoning" | "writing" | "tool_start" | "tool_end" | "retry" | "result" | "error";
+  execution: number;
+  type: "status" | "reasoning" | "writing" | "tool_start" | "tool_end" | "checkpoint" | "resume" | "cancel" | "result" | "error";
   state?: RunSummary["state"];
   message?: string;
   tool?: string;
@@ -215,6 +220,8 @@ export type RunDetail = RunSummary & {
 
 export type SubagentUpdateDetails = {
   kind: "subagent";
+  taskId: string;
+  /** Compatibility alias for existing TUI run cards. */
   runId: string;
   agent: string;
   task: string;

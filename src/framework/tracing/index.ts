@@ -72,10 +72,8 @@ export function traceTools<T extends AgentTool<any>>(tools: T[], tracing: Tracin
   return tools.map((tool) => ({
     ...tool,
     async execute(toolCallId: string, args: unknown, signal?: AbortSignal, onUpdate?: unknown) {
-      const delegateRun = tool.name === "delegate_agent"
-        && typeof args === "object" && args !== null
-        && (args as Record<string, unknown>).action === "run";
-      if (delegateRun) return tool.execute(toolCallId, args as never, signal, onUpdate as never);
+      const delegateLifecycle = tool.name === "delegate_agent";
+      if (delegateLifecycle) return tool.execute(toolCallId, args as never, signal, onUpdate as never);
       if (!tracing.current()) return tool.execute(toolCallId, args as never, signal, onUpdate as never);
 
       return tracing.withObservation(tool.name.replaceAll("_", "-"), "tool", {

@@ -98,7 +98,7 @@ uv sync --locked
 - `/thinking <level>` changes orchestrator reasoning.
 - `/thinking <agent> <level>` overrides a subagent.
 - `/agents` lists configured profiles and their tool allowlists.
-- `/runs` opens a picker for subagent runs created in the current process; `/runs <id>` opens the full execution timeline.
+- `/runs` opens a picker for subagent tasks created or loaded in the current process; `/runs <id>` opens the lifecycle timeline.
 - `/tasks` shows the active product-analysis task; `/tasks all` shows every task in the current session.
 - `/abort` cancels the current model, subagent, or Python tool run.
 - `/exit` saves and exits.
@@ -116,9 +116,9 @@ Foreground subagent work appears inline as a persistent execution card. The card
 - `src/framework/` contains the reusable Agent runtime.
 - `src/tui/` contains the interactive terminal UI.
 - `.shop-agent/sessions/` stores main sessions as JSONL plus metadata.
-- `.shop-agent/runs/` stores child events, transcripts, outputs, and status.
+- `.shop-agent/runs/<taskId>/` stores child events, task/execution status, incremental recovery checkpoints, transcripts, and final output.
 - `.shop-agent/logs/` stores redacted diagnostics.
 - `.shop-agent/checkpoints/task-state.sqlite3` stores session-isolated product-analysis state.
 - `docs/backlog/` records intentionally deferred framework capabilities.
 
-The orchestrator has narrow task-state tools plus `delegate_agent` and an explicit developer-diagnostic tool. The `route_agent` can access taxonomy tools plus that diagnostic tool. `research_agent` receives only confirmed route facts, must use its isolated `web_search` tool before producing transient criteria and distinguishing attributes, and is validated by the trusted Pydantic contract. The general `delegate` remains tool-free. Add future tool names to a profile's explicit `tools` allowlist in `shop/agents.ts`.
+The orchestrator has narrow task-state tools plus `delegate_agent` and an explicit developer-diagnostic tool. `delegate_agent` exposes only `delegate`, `resume`, and `cancel`. Interrupted work returns a recovery summary; resume uses the same logical `taskId` without accepting a changed task. The `route_agent` can access taxonomy tools plus that diagnostic tool. `research_agent` receives only confirmed route facts, must use its isolated `web_search` tool before producing transient criteria and distinguishing attributes, and is validated by the trusted Pydantic contract. The general `delegate` remains tool-free. Add future tool names to a profile's explicit `tools` allowlist in `shop/agents.ts`.

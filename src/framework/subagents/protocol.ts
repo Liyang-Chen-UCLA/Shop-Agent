@@ -10,6 +10,9 @@ export type TrustedRoute = {
 };
 
 export type ChildRequest = {
+  /** Stable logical subagent task identity across executions. */
+  taskId: string;
+  /** Unique identity of this concrete child execution. */
   runId: string;
   /** Trusted parent session identity used by developer diagnostics. */
   sessionId: string;
@@ -32,8 +35,26 @@ export type ChildRequest = {
   contractState?: ContractState;
   /** Trusted route facts used by framework finalizers; never model-authored. */
   trustedRoute?: TrustedRoute;
-  attempt: number;
+  execution: number;
+  checkpoint?: SubagentCheckpoint;
   traceContext?: TraceContext;
+};
+
+export type SubagentCheckpoint = {
+  messages: AgentMessage[];
+  contractState?: ContractState;
+  searchStats?: { attempted: number; succeeded: number; failed: number; failures: string[] };
+  marketTransaction?: {
+    sampledProductId?: string;
+    activeProductId?: string;
+    candidateKinds: Array<[string, "criterion" | "attribute"]>;
+    directPatchCandidateIds: string[];
+    semanticCandidateIds: string[];
+    outstandingCandidateIds: string[];
+    batchResolved: boolean;
+    complete: boolean;
+  };
+  lastCompletedActivity: string;
 };
 
 export type ChildEvent =
@@ -42,6 +63,7 @@ export type ChildEvent =
   | { type: "thinking_delta"; delta: string }
   | { type: "tool_start"; name: string; args: unknown }
   | { type: "tool_end"; name: string; result: unknown; isError: boolean }
+  | { type: "checkpoint"; checkpoint: SubagentCheckpoint }
   | { type: "python_request"; id: string; operation: "tool"; tool: string; callId: string; arguments: unknown; context?: PythonToolRuntimeContext }
   | { type: "python_request"; id: string; operation: "validator"; validator: string; value: unknown; context?: Record<string, unknown> }
   | { type: "python_cancel"; id: string }

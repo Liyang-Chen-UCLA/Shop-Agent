@@ -176,13 +176,14 @@ export class ShopAgentTui {
       }
     } else if (event.type === "tool_execution_start") {
       const args = event.args as { action?: string; agent?: string; task?: string } | undefined;
-      if (event.toolName === "delegate_agent" && args?.action === "run" && args.agent && args.task) {
+      if (event.toolName === "delegate_agent" && args?.action === "delegate" && args.agent && args.task) {
         const card: RunCard = {
           id: "",
           agent: args.agent,
           task: args.task,
-          state: "starting",
+          state: "running",
           startedAt: new Date().toISOString(),
+          execution: 1,
           events: [],
           component: new Markdown("", 1, 1, markdownTheme),
         };
@@ -217,8 +218,8 @@ export class ShopAgentTui {
       const card = this.runCardsByCall.get(event.toolCallId);
       if (card) {
         if (!card.endedAt) card.endedAt = new Date().toISOString();
-        if (event.isError && card.state !== "aborted") card.state = "failed";
-        else if (card.state !== "completed") card.state = "completed";
+        if (event.isError) card.state = "interrupted";
+        else if (card.state === "running") card.state = "completed";
         card.component.setText(renderRunCard(card));
       } else {
         this.addNotice(`${event.toolName} ${event.isError ? "failed" : "completed"}.`, event.isError ? "error" : "info");

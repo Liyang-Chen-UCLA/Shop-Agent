@@ -44,9 +44,19 @@ PowerShell start.ps1
 
 ## Delegation flow
 
-The orchestrator sees only the `delegate_agent` framework tool by default. It can list profiles, inspect one profile, or run one foreground subagent.
+The orchestrator sees only the `delegate_agent` framework tool by default. Its API is deliberately limited to `delegate(agent, task)`, `resume(taskId)`, and `cancel(taskId)`; there is no inspect, steer, or free-form messaging path.
 
-Each run starts `src/framework/subagents/child-runner.ts` in an independent Node process. The child receives a fresh task rather than the parent transcript, loads only its profile allowlist, streams JSON Lines events to the parent, and stores its full transcript under `.shop-agent/runs/`. Subagents cannot delegate again and never start Python. Python requests travel to `SubagentManager`, which rechecks the child profile permission before forwarding them to the shared worker.
+Each execution starts `src/framework/subagents/child-runner.ts` in an independent Node process. A stable logical `taskId` survives process replacement while every delegate/resume gets a new `executionId`. The child receives the original task rather than the parent transcript, loads only its profile allowlist, and streams JSON Lines events to the parent. After each fully completed agent turn, the parent durably records the subagent messages and framework-owned contract/runtime state. An interrupted execution returns only a bounded recovery summary to the orchestrator; `resume(taskId)` restores that checkpoint and carries no new business instruction. Subagents cannot delegate again and never start Python. Python requests travel to `SubagentManager`, which rechecks the child profile permission before forwarding them to the shared worker.
+
+Subagent lifecycle state is operational data, separate from canonical product-analysis tasks:
+
+```text
+running → completed
+       ↘ interrupted → resume (same taskId, new execution) → completed
+                     ↘ cancel → cancelled
+```
+
+`completed` and `cancelled` are terminal. The manager never retries a subagent automatically. The Research→Market workflow remains serial and persists its current stage under the same logical task so a completed Research stage is not repeated when Market resumes.
 
 Native tools are resolved through the same explicit profile allowlists as Python
 tools. `web_search` is available to `research_agent` and `market_agent`; it
@@ -109,7 +119,7 @@ The canonical taxonomy is `shop/data/google_product_taxonomy_zh-CN.jsonl`. Tools
 `.shop-agent/` is runtime-only and ignored by Git:
 
 - `sessions/` contains main transcripts as JSONL plus metadata.
-- `runs/` contains subagent events, transcripts, outputs, and status.
+- `runs/<taskId>/` contains subagent task metadata, lifecycle status, incremental checkpoint, events, transcript, and final output. Runtime execution artifacts remain uncommitted.
 - `logs/` contains redacted diagnostics.
 - `developer-feedback/issues.jsonl` contains bounded developer-only diagnostics.
 - `checkpoints/task-state.sqlite3` contains LangGraph checkpoints for minimal product-analysis task state.

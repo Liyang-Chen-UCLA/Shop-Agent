@@ -44,12 +44,12 @@ export default defineConfig({
     timeout: {
       subagentDefaultMs: 120_000,
       agents: {
-        market_agent: 600_000,
+        market_agent: 900_000,
       },
     },
 
     market: {
-      maxDistinctProducts: 5,
+      maxDistinctProducts: 1,
     },
   },
 });

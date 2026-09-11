@@ -88,6 +88,7 @@ async function main(): Promise<void> {
     agentName: request.profile.id,
   });
   const productTransaction = new MarketProductTransaction();
+  if (request.checkpoint?.marketTransaction) productTransaction.restore(request.checkpoint.marketTransaction);
   let contractStateTools: ReturnType<typeof createContractStateTools> | undefined;
   const pythonTools = createPythonAgentTools(definitions, pythonAllowlist, python, runtimeContext, {
     onBeforeTool: (definition) => {
@@ -119,6 +120,7 @@ async function main(): Promise<void> {
       productTransaction.extracted(input.item_id, output, contractStateTools.store.get());
     },
   });
+  if (request.checkpoint?.searchStats) Object.assign(nativeToolSet.searchStats, request.checkpoint.searchStats);
   const terminalOutputTool = createTerminalOutputTool(request.profile, {
     python,
     runtimeContext: () => ({
@@ -155,7 +157,7 @@ async function main(): Promise<void> {
     }
     : undefined;
   contractStateTools = request.profile.contractState
-    ? createContractStateTools(request.profile.contractState, request.contractState, {
+    ? createContractStateTools(request.profile.contractState, request.checkpoint?.contractState ?? request.contractState, {
       onFinalize: publishContractState,
       runtime: request.profile.id === "market_agent"
         ? {
@@ -238,13 +240,14 @@ async function main(): Promise<void> {
       model,
       thinkingLevel: request.thinking,
       tools,
-      messages: [],
+      messages: request.checkpoint?.messages ?? [],
     },
     streamFn: runtime.streamSimple,
-    sessionId: request.runId,
+    sessionId: request.taskId,
     toolExecution: "sequential",
   });
 
+  let lastCompletedActivity = request.checkpoint?.lastCompletedActivity ?? "Task initialized";
   agent.subscribe((event) => {
     if (event.type === "agent_start") emit({ type: "status", state: "running", message: `${request.profile.id} is working` });
     if (event.type === "message_update") {
@@ -261,14 +264,27 @@ async function main(): Promise<void> {
         ? (event.isError ? "web_search failed" : "web_search completed")
         : event.result;
       emit({ type: "tool_end", name: event.toolName, result, isError: event.isError });
+      if (!event.isError) lastCompletedActivity = `Completed ${event.toolName}`;
+    } else if (event.type === "turn_end" && event.toolResults.length > 0) {
+      emit({
+        type: "checkpoint",
+        checkpoint: {
+          messages: sanitizeDeveloperDiagnosticMessages(agent!.state.messages),
+          ...(contractStateTools ? { contractState: contractStateTools.store.get() } : {}),
+          searchStats: { ...nativeToolSet.searchStats, failures: [...nativeToolSet.searchStats.failures] },
+          ...(request.profile.id === "market_agent" ? { marketTransaction: productTransaction.snapshot() } : {}),
+          lastCompletedActivity,
+        },
+      });
     }
   });
 
-  await agent.prompt(request.task);
+  if (request.checkpoint?.messages.length) await agent.continue();
+  else await agent.prompt(request.task);
   const finalMessage = [...agent.state.messages].reverse().find((message) => message.role === "assistant");
   if (finalMessage?.role === "assistant" && finalMessage.stopReason === "aborted") {
     const timedOut = abortReason === "timeout";
-    observation?.fail?.(timedOut ? "Subagent attempt timed out." : "Subagent was aborted by the user.", !timedOut);
+    observation?.fail?.(timedOut ? "Subagent execution timed out." : "Subagent was aborted by the user.", !timedOut);
     throw new Error(timedOut ? `Subagent '${request.profile.id}' timed out.` : `Subagent '${request.profile.id}' was aborted.`);
   }
   let text = "";
@@ -313,15 +329,34 @@ async function main(): Promise<void> {
   }
   observation?.update({
     output: value ?? text,
-    metadata: { agent: request.profile.id, runId: request.runId, attempt: request.attempt, outcome: "success" },
+    metadata: {
+      taskId: request.taskId,
+      subagentType: request.profile.id,
+      executionId: request.runId,
+      execution: request.execution,
+      status: "completed",
+      resumed: request.execution > 1,
+    },
   });
   emit({ type: "result", text, value, messages: sanitizeDeveloperDiagnosticMessages(agent.state.messages) });
   };
-  const attributes = { input: request.task, metadata: { agent: request.profile.id, runId: request.runId, attempt: request.attempt } };
+  const attributes = {
+    input: request.execution > 1
+      ? { resumed: true, lastCompletedActivity: request.checkpoint?.lastCompletedActivity ?? "Task initialized" }
+      : request.task,
+    metadata: {
+      taskId: request.taskId,
+      subagentType: request.profile.id,
+      executionId: request.runId,
+      execution: request.execution,
+      status: "running",
+      resumed: request.execution > 1,
+    },
+  };
   if (request.traceContext) {
-    await tracing.withRemoteObservation(`attempt-${request.attempt}`, "span", attributes, request.traceContext, execute);
+    await tracing.withRemoteObservation("execute-subagent", "span", attributes, request.traceContext, execute);
   } else {
-    await tracing.withObservation(`attempt-${request.attempt}`, "span", attributes, execute, request.sessionId);
+    await tracing.withObservation("execute-subagent", "span", attributes, execute, request.sessionId);
   }
   } finally {
     await python.close();

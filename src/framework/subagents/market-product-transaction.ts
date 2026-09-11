@@ -26,6 +26,34 @@ export class MarketProductTransaction {
   batchResolved = false;
   complete = true;
 
+  snapshot() {
+    return {
+      sampledProductId: this.sampledProductId,
+      activeProductId: this.activeProductId,
+      candidateKinds: [...this.candidateKinds.entries()],
+      directPatchCandidateIds: [...this.directPatchCandidateIds],
+      semanticCandidateIds: [...this.semanticCandidateIds],
+      outstandingCandidateIds: [...this.outstandingCandidateIds],
+      batchResolved: this.batchResolved,
+      complete: this.complete,
+    };
+  }
+
+  restore(snapshot: ReturnType<MarketProductTransaction["snapshot"]>): void {
+    this.sampledProductId = snapshot.sampledProductId;
+    this.activeProductId = snapshot.activeProductId;
+    this.candidateKinds.clear();
+    for (const [id, kind] of snapshot.candidateKinds) this.candidateKinds.set(id, kind);
+    this.directPatchCandidateIds.clear();
+    for (const id of snapshot.directPatchCandidateIds) this.directPatchCandidateIds.add(id);
+    this.semanticCandidateIds.clear();
+    for (const id of snapshot.semanticCandidateIds) this.semanticCandidateIds.add(id);
+    this.outstandingCandidateIds.clear();
+    for (const id of snapshot.outstandingCandidateIds) this.outstandingCandidateIds.add(id);
+    this.batchResolved = snapshot.batchResolved;
+    this.complete = snapshot.complete;
+  }
+
   sampled(itemId: string): void {
     this.sampledProductId = itemId;
     this.activeProductId = undefined;
