@@ -161,7 +161,6 @@ async function main(): Promise<void> {
           onUpsert: (_kind, item, existing) => {
             const activeProductId = productTransaction.activeProductId;
             if (!activeProductId) throw new Error("market_agent patch_state requires a successfully extracted active product.");
-            productTransaction.assertUpsertAllowed(_kind, item);
             const existingIds = existing && Array.isArray(existing.observed_product_ids)
               ? existing.observed_product_ids.filter((value): value is string => typeof value === "string")
               : [];
@@ -177,6 +176,10 @@ async function main(): Promise<void> {
     if (!patchStateTool) throw new Error("market_agent requires patch_state.");
     const executePatchState = patchStateTool.execute.bind(patchStateTool);
     patchStateTool.execute = async (toolCallId, params, signal, onUpdate) => {
+      for (const item of upsertsFromPatchArguments(PATCH_STATE_TOOL, params)) {
+        const kind = isRecord(params) && (params.kind === "criterion" || params.kind === "attribute") ? params.kind : undefined;
+        if (kind) productTransaction.assertPatchAllowed(kind, item, contractStateTools!.store.get());
+      }
       const result = await executePatchState(toolCallId, params, signal, onUpdate);
       for (const item of upsertsFromPatchArguments(PATCH_STATE_TOOL, params)) productTransaction.upsertApplied(item);
       return result;
@@ -185,6 +188,14 @@ async function main(): Promise<void> {
     if (!patchStateBatchTool) throw new Error("market_agent requires patch_state_batch.");
     const executePatchStateBatch = patchStateBatchTool.execute.bind(patchStateBatchTool);
     patchStateBatchTool.execute = async (toolCallId, params, signal, onUpdate) => {
+      if (isRecord(params) && Array.isArray(params.patches)) {
+        const state = contractStateTools!.store.get();
+        for (const patch of params.patches) {
+          if (!isRecord(patch) || patch.op !== "upsert" || (patch.kind !== "criterion" && patch.kind !== "attribute")) continue;
+          const item = contractItem(patch.item);
+          if (item) productTransaction.assertPatchAllowed(patch.kind, item, state);
+        }
+      }
       const result = await executePatchStateBatch(toolCallId, params, signal, onUpdate);
       // Only mark candidates after the store has committed the complete batch.
       for (const item of upsertsFromPatchArguments(PATCH_STATE_BATCH_TOOL, params)) productTransaction.upsertApplied(item);
@@ -209,7 +220,7 @@ async function main(): Promise<void> {
         }
       },
       onResolved: async (result: SemanticMatchBatchToolResult) => {
-        productTransaction.resolved(result);
+        productTransaction.resolved(result, contractStateTools.store.get());
       },
     })
     : undefined;

@@ -8,6 +8,14 @@ function candidateEntries(output: Pick<ContractState, "criteria" | "attributes">
   ];
 }
 
+function stateIds(state: ContractState): Set<string> {
+  return new Set(candidateEntries(state).map(([id]) => id));
+}
+
+function invalidFieldId(id: string): Error {
+  return new Error(`Invalid market field id '${id}'.\nExpected an id from current get_state or extract_product.`);
+}
+
 export class MarketProductTransaction {
   sampledProductId?: string;
   activeProductId?: string;
@@ -45,13 +53,13 @@ export class MarketProductTransaction {
     this.updateComplete();
   }
 
-  assertUpsertAllowed(kind: ContractStateKind, item: ContractItem): void {
+  assertPatchAllowed(kind: ContractStateKind, item: ContractItem, state: ContractState): void {
     if (!this.activeProductId) throw new Error("market_agent patch_state requires a successfully extracted active product.");
-    const id = typeof item.id === "string" ? item.id : undefined;
-    const isDirectCandidate = id !== undefined
-      && this.directPatchCandidateIds.has(id)
+    const id = String(item.id);
+    if (!this.candidateKinds.has(id) && !stateIds(state).has(id)) throw invalidFieldId(id);
+    const isDirectCandidate = this.directPatchCandidateIds.has(id)
       && this.candidateKinds.get(id) === kind;
-    if (id !== undefined && this.directPatchCandidateIds.has(id) && !isDirectCandidate) {
+    if (this.directPatchCandidateIds.has(id) && !isDirectCandidate) {
       throw new Error(`market_agent patch_state candidate '${id}' must keep its extracted kind.`);
     }
     if (!isDirectCandidate && !this.batchResolved) {
@@ -65,12 +73,24 @@ export class MarketProductTransaction {
     this.updateComplete();
   }
 
-  resolved(result: SemanticMatchBatchToolResult): void {
+  resolved(result: SemanticMatchBatchToolResult, state: ContractState): void {
     if (this.batchResolved) throw new Error("semantic_match_batch may be called at most once for each product.");
     if (result.active_product_id !== this.activeProductId) {
       throw new Error("semantic_match_batch resolved a product other than the current extract_product result.");
     }
     const resolvedIds = new Set<string>();
+    const extractedIds = new Set(this.candidateKinds.keys());
+    const canonicalIds = stateIds(state);
+    for (const entry of result.matched) {
+      const id = String(entry.candidate.id);
+      if (!extractedIds.has(id)) throw invalidFieldId(id);
+      const canonicalId = String(entry.canonical_item_id);
+      if (!canonicalIds.has(canonicalId)) throw invalidFieldId(canonicalId);
+    }
+    for (const entry of result.unmatched) {
+      const id = String(entry.candidate.id);
+      if (!extractedIds.has(id)) throw invalidFieldId(id);
+    }
     for (const entry of [...result.matched, ...result.unmatched]) {
       const id = String(entry.candidate.id);
       if (!this.semanticCandidateIds.has(id)) {

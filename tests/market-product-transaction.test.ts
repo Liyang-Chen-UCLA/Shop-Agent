@@ -5,6 +5,67 @@ import { MarketProductTransaction } from "../src/framework/subagents/market-prod
 const criterion = (id: string) => ({ id });
 const attribute = (id: string) => ({ id });
 
+test("patch accepts an id from the current extract_product result", () => {
+  const transaction = new MarketProductTransaction();
+  transaction.sampled("product-vibration");
+  transaction.extracted("product-vibration", {
+    criteria: [],
+    attributes: [attribute("vibration")],
+  }, { criteria: [], attributes: [] });
+
+  assert.doesNotThrow(() => {
+    transaction.assertPatchAllowed("attribute", attribute("vibration"), { criteria: [], attributes: [] });
+  });
+});
+
+test("patch rejects an id absent from current get_state and extract_product", () => {
+  const transaction = new MarketProductTransaction();
+  transaction.sampled("product-vibration");
+  transaction.extracted("product-vibration", {
+    criteria: [],
+    attributes: [attribute("vibration")],
+  }, { criteria: [], attributes: [] });
+
+  assert.throws(
+    () => transaction.assertPatchAllowed("attribute", attribute("has_vibration"), { criteria: [], attributes: [] }),
+    /Invalid market field id 'has_vibration'.\s+Expected an id from current get_state or extract_product\./,
+  );
+});
+
+test("semantic match rejects source ids outside extract_product and target ids outside get_state", () => {
+  const createTransaction = () => {
+    const transaction = new MarketProductTransaction();
+    transaction.sampled("product-semantic");
+    transaction.extracted("product-semantic", {
+      criteria: [],
+      attributes: [attribute("vibration")],
+    }, { criteria: [], attributes: [attribute("canonical-vibration")] });
+    return transaction;
+  };
+  const match = (candidateId: string, canonicalId: string) => ({
+    active_product_id: "product-semantic",
+    matched: [{
+      active_product_id: "product-semantic",
+      candidate: attribute(candidateId),
+      canonical_item_id: canonicalId,
+      kind: "attribute" as const,
+      matched: true,
+      method: "id" as const,
+    }],
+    unmatched: [],
+  });
+  const state = { criteria: [], attributes: [attribute("canonical-vibration")] };
+
+  assert.throws(
+    () => createTransaction().resolved(match("has_vibration", "canonical-vibration"), state),
+    /Invalid market field id 'has_vibration'/,
+  );
+  assert.throws(
+    () => createTransaction().resolved(match("vibration", "invented-canonical"), state),
+    /Invalid market field id 'invented-canonical'/,
+  );
+});
+
 test("empty criteria and attribute kinds allow direct patching", () => {
   const transaction = new MarketProductTransaction();
   transaction.sampled("product-1");
@@ -13,10 +74,10 @@ test("empty criteria and attribute kinds allow direct patching", () => {
     attributes: [attribute("attribute-1")],
   }, { criteria: [], attributes: [] });
 
-  transaction.assertUpsertAllowed("criterion", criterion("criterion-1"));
+  transaction.assertPatchAllowed("criterion", criterion("criterion-1"), { criteria: [], attributes: [] });
   transaction.upsertApplied(criterion("criterion-1"));
   assert.equal(transaction.complete, false);
-  transaction.assertUpsertAllowed("attribute", attribute("attribute-1"));
+  transaction.assertPatchAllowed("attribute", attribute("attribute-1"), { criteria: [], attributes: [] });
   transaction.upsertApplied(attribute("attribute-1"));
 
   assert.equal(transaction.batchResolved, true);
@@ -32,12 +93,12 @@ test("multiple candidates from one empty kind are all consumed before transactio
     attributes: [],
   }, { criteria: [], attributes: [attribute("existing-attribute")] });
 
-  transaction.assertUpsertAllowed("criterion", criterion("criterion-1"));
+  transaction.assertPatchAllowed("criterion", criterion("criterion-1"), { criteria: [], attributes: [attribute("existing-attribute")] });
   transaction.upsertApplied(criterion("criterion-1"));
   assert.deepEqual([...transaction.outstandingCandidateIds], ["criterion-2"]);
   assert.equal(transaction.complete, false);
 
-  transaction.assertUpsertAllowed("criterion", criterion("criterion-2"));
+  transaction.assertPatchAllowed("criterion", criterion("criterion-2"), { criteria: [], attributes: [attribute("existing-attribute")] });
   transaction.upsertApplied(criterion("criterion-2"));
   assert.equal(transaction.outstandingCandidateIds.size, 0);
   assert.equal(transaction.complete, true);
@@ -52,7 +113,7 @@ test("non-empty kinds still require semantic matching and unmatched patches", ()
   }, { criteria: [criterion("existing-criterion")], attributes: [] });
 
   assert.throws(
-    () => transaction.assertUpsertAllowed("criterion", criterion("new-criterion")),
+    () => transaction.assertPatchAllowed("criterion", criterion("new-criterion"), { criteria: [criterion("existing-criterion")], attributes: [] }),
     /requires semantic_match_batch/,
   );
   transaction.resolved({
@@ -64,9 +125,9 @@ test("non-empty kinds still require semantic matching and unmatched patches", ()
       kind: "criterion",
       matched: false,
     }],
-  });
+  }, { criteria: [criterion("existing-criterion")], attributes: [] });
   assert.equal(transaction.complete, false);
-  transaction.assertUpsertAllowed("criterion", criterion("new-criterion"));
+  transaction.assertPatchAllowed("criterion", criterion("new-criterion"), { criteria: [criterion("existing-criterion")], attributes: [] });
   transaction.upsertApplied(criterion("new-criterion"));
   assert.equal(transaction.complete, true);
 });
@@ -95,16 +156,16 @@ test("mixed extraction completes only after semantic and direct candidates are c
       kind: "attribute",
       matched: false,
     }],
-  });
+  }, { criteria: [], attributes: [attribute("existing-attribute")] });
   assert.deepEqual(
     [...transaction.outstandingCandidateIds].sort(),
     ["direct-criterion", "unmatched-attribute"],
   );
 
-  transaction.assertUpsertAllowed("attribute", attribute("unmatched-attribute"));
+  transaction.assertPatchAllowed("attribute", attribute("unmatched-attribute"), { criteria: [], attributes: [attribute("existing-attribute")] });
   transaction.upsertApplied(attribute("unmatched-attribute"));
   assert.equal(transaction.complete, false);
-  transaction.assertUpsertAllowed("criterion", criterion("direct-criterion"));
+  transaction.assertPatchAllowed("criterion", criterion("direct-criterion"), { criteria: [], attributes: [attribute("existing-attribute")] });
   transaction.upsertApplied(criterion("direct-criterion"));
   assert.equal(transaction.complete, true);
 });
