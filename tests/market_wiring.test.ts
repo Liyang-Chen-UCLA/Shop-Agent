@@ -29,9 +29,11 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(research?.systemPrompt ?? "", /attributes use the same common\/type-specific fields but must omit `direction` entirely/i);
   assert.equal(research?.outputValidator, undefined);
   assert.equal(research?.outputSchema, undefined);
-  assert.deepEqual(research?.tools, ["web_search", "get_state", "patch_state", "finalize_state", "report_developer_issue"]);
+  assert.deepEqual(research?.tools, ["web_search", "get_state", "patch_state", "patch_state_batch", "finalize_state", "report_developer_issue"]);
   assert.ok(research?.contractState);
   assert.doesNotMatch(composeSystemPrompt(research!), /submit the final structured result using the `submit_result` tool/);
+  assert.match(research?.systemPrompt ?? "", /patch_state_batch/);
+  assert.match(research?.systemPrompt ?? "", /Do not call it after a successful patch/);
   assert.match(research?.systemPrompt ?? "", /call `finalize_state`/);
   assert.doesNotMatch(research?.systemPrompt ?? "", /submit the final structured result using the `submit_result` tool/);
   const routeAgent = config.agents.find((agent) => agent.id === "route_agent");
@@ -52,7 +54,7 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.equal(market?.thinking, undefined);
   assert.equal(market?.outputValidator, undefined);
   assert.equal(market?.outputSchema, undefined);
-  assert.deepEqual(market?.tools, ["shopping_env", "extract_product", "semantic_match_batch", "get_state", "patch_state", "finalize_state", "web_search", "report_developer_issue"]);
+  assert.deepEqual(market?.tools, ["shopping_env", "extract_product", "semantic_match_batch", "get_state", "patch_state", "patch_state_batch", "finalize_state", "web_search", "report_developer_issue"]);
   assert.ok(market?.contractState);
   assert.deepEqual(market?.contractState?.runtimeItemDefaults, { observed_product_ids: [] });
   assert.deepEqual(market?.contractState?.runtimeMutableFields, ["aliases", "observed_product_ids"]);

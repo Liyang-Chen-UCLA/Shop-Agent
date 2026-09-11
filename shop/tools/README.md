@@ -52,7 +52,8 @@ The market stage has one narrow Python sampling tool. `shopping_env` accepts
 only `{}` and takes the next product in rank/item-id order. It has no input
 arguments for rereading or selecting an item. The Market framework passes the
 returned OCR to the isolated `extract_product` tool, then maintains the
-canonical state through `semantic_match_batch` and `patch_state`; product files and
+canonical state through `semantic_match_batch` and `patch_state_batch` (with
+single `patch_state` reserved for corrections/removals); product files and
 product matrices are not published.
 The trusted context supplies `datasetPath`, `maxDistinctProducts`, and a
 run id; the complete parquet `context_text` is returned as `ocr_text`.

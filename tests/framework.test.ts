@@ -9,7 +9,7 @@ import { createPythonAgentTools, discoverPythonTools } from "../src/framework/py
 import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, MAX_CRITERIA_SEARCH_QUERIES, SEARCH_RESULT_MAX_CHARS, SEARCH_TRUNCATION_MARKER, truncateSearchResult } from "../src/framework/native-tools.ts";
 import { validateWithTrustedValidator } from "../src/framework/output-validator.ts";
 import { createTerminalOutputTool, SUBMIT_RESULT_TOOL } from "../src/framework/terminal-output.ts";
-import { createContractStateTools } from "../src/framework/contract-state.ts";
+import { createContractStateTools, PATCH_STATE_BATCH_TOOL, PATCH_STATE_TOOL } from "../src/framework/contract-state.ts";
 import { isDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticAgentEvent, sanitizeDeveloperDiagnosticMessages } from "../src/framework/content.ts";
 import { validateJsonSchema } from "../src/framework/schema.ts";
 import { SessionStore } from "../src/framework/session-store.ts";
@@ -45,7 +45,7 @@ test("loads project config and OpenCode Go model catalog", async () => {
   const research = config.agents.find((agent) => agent.id === "research_agent");
   assert.equal(research?.outputValidator, undefined);
   assert.equal(research?.outputSchema, undefined);
-  assert.deepEqual(research?.tools, ["web_search", "get_state", "patch_state", "finalize_state", "report_developer_issue"]);
+  assert.deepEqual(research?.tools, ["web_search", "get_state", "patch_state", "patch_state_batch", "finalize_state", "report_developer_issue"]);
   assert.ok(research?.contractState);
   assert.match(config.agents[0].systemPrompt, /orchestrator/i);
 
@@ -219,12 +219,19 @@ test("framework contract state upserts, overwrites, moves, removes, and finalize
   };
   const stateTools = createContractStateTools({ itemSchemas });
   const get = stateTools.tools.find((tool) => tool.name === "get_state")!;
-  const patch = stateTools.tools.find((tool) => tool.name === "patch_state")!;
+  const patch = stateTools.tools.find((tool) => tool.name === PATCH_STATE_TOOL)!;
   const finalize = stateTools.tools.find((tool) => tool.name === "finalize_state")!;
   const read = async () => JSON.parse(((await get.execute("get", {})).content[0] as { text: string }).text);
 
   assert.deepEqual(await read(), { criteria: [], attributes: [] });
-  await patch.execute("create", { op: "upsert", kind: "criterion", item: { id: "A", label: "first" } });
+  const createResult = await patch.execute("create", { op: "upsert", kind: "criterion", item: { id: "A", label: "first" } });
+  assert.deepEqual(JSON.parse((createResult.content[0] as { text: string }).text), {
+    ok: true,
+    applied: [{ op: "upsert", kind: "criterion", item_id: "A" }],
+    criteria_count: 1,
+    attribute_count: 0,
+  });
+  assert.equal("state" in (createResult.details as Record<string, unknown>), false);
   assert.deepEqual(await read(), { criteria: [{ id: "A", label: "first" }], attributes: [] });
 
   await patch.execute("overwrite", { op: "upsert", kind: "criterion", item: { id: "A", label: "second" } });
@@ -244,6 +251,201 @@ test("framework contract state upserts, overwrites, moves, removes, and finalize
   const result = await finalize.execute("finalize", {});
   assert.equal(result.terminate, true);
   assert.deepEqual(stateTools.store.finalized(), { criteria: [], attributes: [] });
+});
+
+test("patch_state_batch atomically applies compact receipts and preserves runtime hook semantics", async () => {
+  const config = {
+    itemSchemas: {
+      criterion: {
+        type: "object",
+        properties: { id: { type: "string" }, label: { type: "string" } },
+        required: ["id", "label"],
+        additionalProperties: false,
+      },
+      attribute: {
+        type: "object",
+        properties: { id: { type: "string" }, label: { type: "string" } },
+        required: ["id", "label"],
+        additionalProperties: false,
+      },
+    },
+    runtimeItemSchema: {
+      type: "object",
+      properties: { observed_product_ids: { type: "array", items: { type: "string" } } },
+      required: ["observed_product_ids"],
+      additionalProperties: false,
+    },
+    runtimeItemDefaults: { observed_product_ids: [] },
+  };
+  const hookCalls: string[] = [];
+  const stateTools = createContractStateTools(config, undefined, {
+    runtime: {
+      onUpsert: (_kind, item) => {
+        hookCalls.push(String(item.id));
+        return { observed_product_ids: ["product-1"] };
+      },
+    },
+  });
+  const batch = stateTools.tools.find((tool) => tool.name === PATCH_STATE_BATCH_TOOL)!;
+  const raw = {
+    patches: [
+      { op: "upsert", kind: "criterion", item: JSON.stringify({ id: "criterion-a", label: "A" }) },
+      { op: "upsert", kind: "attribute", item: { id: "attribute-a", label: "A" } },
+      { op: "remove", item_id: "missing" },
+    ],
+  };
+  const prepared = batch.prepareArguments!(raw);
+  assert.notEqual(prepared, raw);
+  const result = await batch.execute("batch", prepared);
+  const receipt = JSON.parse((result.content[0] as { text: string }).text);
+  assert.deepEqual(receipt, {
+    ok: true,
+    applied: [
+      { op: "upsert", kind: "criterion", item_id: "criterion-a" },
+      { op: "upsert", kind: "attribute", item_id: "attribute-a" },
+      { op: "remove", item_id: "missing" },
+    ],
+    criteria_count: 1,
+    attribute_count: 1,
+  });
+  assert.deepEqual(result.details, { tool: PATCH_STATE_BATCH_TOOL, ...receipt });
+  assert.doesNotMatch(JSON.stringify(result), /"criteria"\s*:/);
+  assert.doesNotMatch(JSON.stringify(result), /"attributes"\s*:/);
+  assert.deepEqual(hookCalls, ["criterion-a", "attribute-a"]);
+  assert.deepEqual(stateTools.store.get(), {
+    criteria: [{ id: "criterion-a", label: "A", observed_product_ids: ["product-1"] }],
+    attributes: [{ id: "attribute-a", label: "A", observed_product_ids: ["product-1"] }],
+  });
+});
+
+test("patch_state_batch leaves state unchanged when a later patch fails", async () => {
+  const itemSchemas = {
+    criterion: {
+      type: "object",
+      properties: { id: { type: "string" }, label: { type: "string" } },
+      required: ["id", "label"],
+      additionalProperties: false,
+    },
+    attribute: {
+      type: "object",
+      properties: { id: { type: "string" }, label: { type: "string" } },
+      required: ["id", "label"],
+      additionalProperties: false,
+    },
+  };
+  const hookCalls: string[] = [];
+  const stateTools = createContractStateTools({ itemSchemas }, undefined, {
+    runtime: {
+      onUpsert: (_kind, item) => {
+        hookCalls.push(String(item.id));
+        if (item.id === "second") throw new Error("runtime hook failed");
+      },
+    },
+  });
+  const batch = stateTools.tools.find((tool) => tool.name === PATCH_STATE_BATCH_TOOL)!;
+  await assert.rejects(
+    () => batch.execute("hook-failure", {
+      patches: [
+        { op: "upsert", kind: "criterion", item: { id: "first", label: "First" } },
+        { op: "upsert", kind: "criterion", item: { id: "second", label: "Second" } },
+      ],
+    }),
+    /runtime hook failed/,
+  );
+  assert.deepEqual(hookCalls, ["first", "second"]);
+  assert.deepEqual(stateTools.store.get(), { criteria: [], attributes: [] });
+
+  await assert.rejects(
+    () => batch.execute("schema-failure", {
+      patches: [
+        { op: "upsert", kind: "criterion", item: { id: "valid", label: "Valid" } },
+        { op: "upsert", kind: "criterion", item: { id: "invalid" } },
+      ],
+    }),
+    /patch_state_batch arguments.*required|label/,
+  );
+  assert.deepEqual(stateTools.store.get(), { criteria: [], attributes: [] });
+});
+
+test("Research uses the shared patch_state_batch infrastructure for initial contract items", async () => {
+  const config = await loadConfig(cwd);
+  const profile = config.agents.find((agent) => agent.id === "research_agent")!;
+  assert.ok(profile.contractState);
+  assert.ok(profile.tools?.includes(PATCH_STATE_BATCH_TOOL));
+
+  const batched = createContractStateTools(profile.contractState!);
+  const individual = createContractStateTools(profile.contractState!);
+  const patches = {
+    patches: [
+      {
+        op: "upsert",
+        kind: "criterion",
+        item: {
+          id: "battery_life",
+          name: "续航时间",
+          description: "产品可持续使用的时间",
+          aliases: ["续航"],
+          type: "numeric",
+          units: ["小时"],
+          direction: { type: "larger_better" },
+        },
+      },
+      {
+        op: "upsert",
+        kind: "criterion",
+        item: {
+          id: "waterproof",
+          name: "防水能力",
+          description: "产品抵抗进水的能力",
+          aliases: [],
+          type: "boolean",
+          direction: { type: "true_better" },
+        },
+      },
+      {
+        op: "upsert",
+        kind: "attribute",
+        item: {
+          id: "color",
+          name: "颜色",
+          description: "产品外观颜色",
+          aliases: [],
+          type: "categorical",
+          values: ["黑色", "白色"],
+          value_domain: "open",
+        },
+      },
+      {
+        op: "upsert",
+        kind: "attribute",
+        item: {
+          id: "weight",
+          name: "重量",
+          description: "产品自身重量",
+          aliases: [],
+          type: "numeric",
+          units: ["克"],
+        },
+      },
+    ],
+  };
+  const batch = batched.tools.find((tool) => tool.name === PATCH_STATE_BATCH_TOOL)!;
+  const result = await batch.execute("research-batch", patches);
+  const receipt = JSON.parse((result.content[0] as { text: string }).text);
+  assert.equal(receipt.ok, true);
+  assert.equal(receipt.criteria_count, 2);
+  assert.equal(receipt.attribute_count, 2);
+  assert.doesNotMatch(JSON.stringify(result), /"criteria"\s*:/);
+  assert.doesNotMatch(JSON.stringify(result), /"attributes"\s*:/);
+  assert.equal("state" in (result.details as Record<string, unknown>), false);
+
+  const get = batched.tools.find((tool) => tool.name === "get_state")!;
+  const stateFromGet = JSON.parse(((await get.execute("research-get", {})).content[0] as { text: string }).text);
+  assert.deepEqual(stateFromGet, batched.store.get());
+
+  const patch = individual.tools.find((tool) => tool.name === PATCH_STATE_TOOL)!;
+  for (const patchInput of patches.patches) await patch.execute("research-single", patchInput);
+  assert.deepEqual(batched.store.get(), individual.store.get());
 });
 
 test("patch_state prepares a stringified object item without weakening validation", async () => {
@@ -416,7 +618,7 @@ test("stateful Market profiles use finalize_state instead of submit_result", asy
   const profile = config.agents.find((agent) => agent.id === "market_agent")!;
   assert.equal(createTerminalOutputTool(profile, { python: testPython }), undefined);
   assert.ok(profile.contractState);
-  assert.deepEqual(profile.tools?.filter((tool) => ["get_state", "patch_state", "finalize_state"].includes(tool)), ["get_state", "patch_state", "finalize_state"]);
+  assert.deepEqual(profile.tools?.filter((tool) => ["get_state", "patch_state", "patch_state_batch", "finalize_state"].includes(tool)), ["get_state", "patch_state", "patch_state_batch", "finalize_state"]);
 });
 
 test("submit_result stores the trusted validator value", async () => {

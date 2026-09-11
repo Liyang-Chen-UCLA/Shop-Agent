@@ -4,7 +4,7 @@ import { createPythonAgentTools } from "../python-tools.ts";
 import { createNativeAgentToolSet, criteriaSearchSatisfied, DEVELOPER_ISSUE_TOOL, SEMANTIC_MATCH_BATCH_TOOL, WEB_SEARCH_TOOL, writeDeveloperIssue } from "../native-tools.ts";
 import { messageText, sanitizeDeveloperDiagnosticMessages } from "../content.ts";
 import { createTerminalOutputTool } from "../terminal-output.ts";
-import { createContractStateTools, PATCH_STATE_TOOL, type ContractItem, type ContractState } from "../contract-state.ts";
+import { createContractStateTools, PATCH_STATE_BATCH_TOOL, PATCH_STATE_TOOL, type ContractItem, type ContractState } from "../contract-state.ts";
 import { createSemanticMatchBatchTool, type SemanticMatchBatchToolResult } from "../semantic-matcher.ts";
 import { TaxonomySemanticMatchCache } from "../semantic-match-cache.ts";
 import { composeSystemPrompt } from "../system-prompt.ts";
@@ -16,6 +16,36 @@ import { MarketProductTransaction } from "./market-product-transaction.ts";
 
 function emit(event: ChildEvent): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function contractItem(value: unknown): ContractItem | undefined {
+  if (isRecord(value)) return value;
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function upsertsFromPatchArguments(toolName: string, params: unknown): ContractItem[] {
+  if (!isRecord(params)) return [];
+  if (toolName === PATCH_STATE_TOOL) {
+    if (params.op !== "upsert") return [];
+    const item = contractItem(params.item);
+    return item ? [item] : [];
+  }
+  if (toolName !== PATCH_STATE_BATCH_TOOL || !Array.isArray(params.patches)) return [];
+  return params.patches.flatMap((patch) => {
+    if (!isRecord(patch) || patch.op !== "upsert") return [];
+    const item = contractItem(patch.item);
+    return item ? [item] : [];
+  });
 }
 
 async function readRequest(): Promise<{ request: ChildRequest; lines: ReturnType<typeof createInterface> }> {
@@ -63,7 +93,7 @@ async function main(): Promise<void> {
     onBeforeTool: (definition) => {
       if (definition.name !== "shopping_env") return;
       if (productTransaction.sampledProductId && !productTransaction.complete) {
-        throw new Error("Complete the current product transaction with extract_product, semantic_match_batch, and patch_state before requesting another shopping_env sample.");
+        throw new Error("Complete the current product transaction with extract_product, semantic_match_batch, and patch_state or patch_state_batch before requesting another shopping_env sample.");
       }
     },
     onToolResult: (definition, result) => {
@@ -148,10 +178,16 @@ async function main(): Promise<void> {
     const executePatchState = patchStateTool.execute.bind(patchStateTool);
     patchStateTool.execute = async (toolCallId, params, signal, onUpdate) => {
       const result = await executePatchState(toolCallId, params, signal, onUpdate);
-      if (params && typeof params === "object" && !Array.isArray(params)
-        && (params as Record<string, unknown>).op === "upsert") {
-        productTransaction.upsertApplied((params as { item: ContractItem }).item);
-      }
+      for (const item of upsertsFromPatchArguments(PATCH_STATE_TOOL, params)) productTransaction.upsertApplied(item);
+      return result;
+    };
+    const patchStateBatchTool = contractStateTools.tools.find((tool) => tool.name === PATCH_STATE_BATCH_TOOL);
+    if (!patchStateBatchTool) throw new Error("market_agent requires patch_state_batch.");
+    const executePatchStateBatch = patchStateBatchTool.execute.bind(patchStateBatchTool);
+    patchStateBatchTool.execute = async (toolCallId, params, signal, onUpdate) => {
+      const result = await executePatchStateBatch(toolCallId, params, signal, onUpdate);
+      // Only mark candidates after the store has committed the complete batch.
+      for (const item of upsertsFromPatchArguments(PATCH_STATE_BATCH_TOOL, params)) productTransaction.upsertApplied(item);
       return result;
     };
   }

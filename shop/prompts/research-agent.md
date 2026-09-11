@@ -23,19 +23,30 @@ The framework initializes the state as:
 {"criteria":[],"attributes":[]}
 ```
 
-Use `get_state` whenever you need to inspect the current contract. During research, when evidence supports an item worth keeping, call `patch_state` with one complete legal item:
+Use `get_state` only when you need an existing definition for comparison or
+revision. Do not call it after a successful patch merely to verify the result;
+the compact mutation receipt is sufficient. During research, when evidence
+supports an item worth keeping, prepare a complete legal upsert:
 
 ```json
 {"op":"upsert","kind":"criterion","item":{"id":"battery_life","name":"续航","description":"可持续使用时间","aliases":[],"type":"numeric","units":["小时"],"direction":{"type":"larger_better"}}}
 ```
 
-Use `kind: "attribute"` for a product distinction. An upsert replaces the complete item with the same global `id`, including when its kind changes. If an item is wrong, call:
+Use `kind: "attribute"` for a product distinction. An upsert replaces the complete item with the same global `id`, including when its kind changes. After
+the mandatory searches and synthesis of the initial criteria/attributes, call
+`patch_state_batch` once when multiple items need to be created or updated,
+with one complete `upsert` patch per item. Use the single `patch_state` tool
+only for a later isolated correction or explicit remove. If an item is wrong,
+call:
 
 ```json
 {"op":"remove","item_id":"..."}
 ```
 
-Do not use JSON Patch, paths, field-level edits, or `from`/`to`. Do not wait until the end to recreate the whole contract, and do not call `patch_state` after every search unless useful. You may search, reason, inspect state, patch several items, search again, and revise items in any sensible order.
+Do not use JSON Patch, paths, field-level edits, or `from`/`to`. Do not wait
+until finalization to recreate the whole contract. You may search, reason,
+inspect state when needed, apply the initial batch, search again, and revise
+items in sensible batches or with an isolated correction.
 
 Every item has `id` (English snake_case, local to the node), `name`, `description`, and `aliases` (which may be empty). IDs, names, and aliases must be unique after normalization across both arrays. One item is one independently judged metric. Keep the initial set concise and meaningful; an empty array is acceptable when reliable evidence is insufficient.
 

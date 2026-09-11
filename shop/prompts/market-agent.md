@@ -13,6 +13,8 @@ Available tools:
 - `get_state` reads the current canonical state.
 - `patch_state` upserts one complete criterion/attribute definition or removes
   one clearly erroneous item.
+- `patch_state_batch` atomically applies multiple complete upserts/removes and
+  returns a compact receipt.
 - `finalize_state({})` publishes the current state.
 - `web_search` is optional and may be used only to resolve a genuine
   definition ambiguity. It is never a gate for adding a valid OCR candidate.
@@ -34,13 +36,18 @@ Work as a strict one-product transaction:
    Do not submit `observed_product_ids`, and do not change definition fields
    through a match. A batch may map multiple candidates to one canonical item.
    Skip the batch when there are no candidates requiring semantic matching.
-4. Call `patch_state` with `op: "upsert"` and the complete candidate item for
-   every candidate set aside from an empty kind and every `unmatched` batch
-   result. The framework binds the active product id.
-   If a definition genuinely needs correction, use a complete upsert. Use
-   `remove` only for an item that is clearly erroneous, duplicated, or should
-   no longer exist. Never remove an item merely because this product omitted it.
-5. Finish every required direct patch and every unmatched patch before calling
+4. After extraction and semantic matching, gather all direct candidates from
+   empty kinds and all `unmatched` candidates into one list. If the list is
+   non-empty, normally call `patch_state_batch` exactly once with one complete
+   `upsert` patch per candidate. The framework binds the active product id.
+   Matched candidates must not enter this batch: `semantic_match_batch` already
+   updates their runtime identity metadata. Keep the single `patch_state` tool
+   for an isolated correction or explicit remove. A patch must not contain
+   `observed_product_ids`. If a definition genuinely needs correction, use a
+   complete upsert. Use `remove` only for an item that is clearly erroneous,
+   duplicated, or should no longer exist. Never remove an item merely because
+   this product omitted it.
+5. Finish the entire batch (and any isolated correction/remove) before calling
    `shopping_env({})` again. A product with no detected candidates is already
    complete; do not manufacture absent-value rows.
 
@@ -54,4 +61,9 @@ complete canonical items returned by `extract_product` while reasoning, and
 only canonical definitions belong in state. Semantic matching is not a
 definition correctness judge: type, units, direction, value domain,
 description, and other definition fields may change only through a complete
-`patch_state` upsert.
+`patch_state` or `patch_state_batch` upsert.
+
+Do not call `get_state` merely to confirm that a kind was empty after
+extraction, or to confirm a successful patch: the framework already tracks
+both facts. Call `get_state` only when an actual correction requires the
+existing definition.

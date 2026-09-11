@@ -228,6 +228,9 @@ test("contract state mutations are ordinary traced tool observations", async () 
   assert.equal(patchObservation?.parentSpanId, tracing.records[0]?.spanId);
   assert.match(JSON.stringify(patchObservation?.attributes.input), /"op":"upsert"/);
   assert.match(JSON.stringify(patchObservation?.attributes.output), /"A"/);
+  assert.doesNotMatch(JSON.stringify(patchObservation?.attributes.output), /"state"\s*:/);
+  assert.doesNotMatch(JSON.stringify(patchObservation?.attributes.output), /"criteria"\s*:/);
+  assert.doesNotMatch(JSON.stringify(patchObservation?.attributes.output), /"attributes"\s*:/);
 });
 
 test("extract_product is one traced tool observation around its isolated model request", async () => {

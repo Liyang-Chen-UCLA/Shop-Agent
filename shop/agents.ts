@@ -46,7 +46,7 @@ export const agents: AgentProfile[] = [
     role: "subagent",
     description: "Maintains a category-level evaluation contract from confirmed taxonomy facts and publishes it through framework state.",
     systemPrompt: { file: "./shop/prompts/research-agent.md" },
-    tools: ["web_search", "get_state", "patch_state", "finalize_state", "report_developer_issue"],
+    tools: ["web_search", "get_state", "patch_state", "patch_state_batch", "finalize_state", "report_developer_issue"],
     contractState: {
       itemSchemas: {
         criterion: criterionSchema,
@@ -62,7 +62,7 @@ export const agents: AgentProfile[] = [
     description: "Maintains the canonical market contract while processing sampled Taobao OCR contexts one product at a time.",
     systemPrompt: { file: "./shop/prompts/market-agent.md" },
     skill: { file: "./shop/skills/market-alignment/SKILL.md" },
-    tools: ["shopping_env", "extract_product", "semantic_match_batch", "get_state", "patch_state", "finalize_state", "web_search", "report_developer_issue"],
+    tools: ["shopping_env", "extract_product", "semantic_match_batch", "get_state", "patch_state", "patch_state_batch", "finalize_state", "web_search", "report_developer_issue"],
     webSearchPolicy: "market",
     contractState: {
       itemSchemas: {

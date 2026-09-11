@@ -19,17 +19,25 @@ requesting the next one.
    an empty array for the other kind. A matched candidate only updates trusted
    runtime identity metadata; multiple extracted candidates may match one
    canonical item. Skip the batch if no candidates require matching. Then
-   submit every set-aside candidate and every unmatched result with one
-   complete `patch_state` upsert. A patch must not contain
-   `observed_product_ids`; the framework supplies it.
-5. Finish all direct patches and unmatched patches before requesting the next
-   `shopping_env({})` sample.
+   gather every set-aside candidate and every unmatched result and, when any
+   need to be added, submit them in one `patch_state_batch` call containing
+   one complete `upsert` patch per candidate. Matched candidates must not enter
+   this batch because the matcher already supplied their runtime identity
+   metadata. Keep single `patch_state` for an isolated correction or explicit
+   remove. A patch must not contain `observed_product_ids`; the framework
+   supplies it.
+5. Finish the single batch containing all direct and unmatched patches before
+   requesting the next `shopping_env({})` sample; also finish any isolated
+   correction or remove.
 6. Only use `patch_state remove` for an explicit bad, duplicate, or obsolete
    item. Do not remove low-frequency or unmentioned dimensions.
 
 The framework merges aliases by normalized identity and retains all existing
 observed product ids when a definition is replaced or moves between kinds.
-Use `get_state` whenever the current definition is needed. Optional
+Do not call `get_state` just to check whether extraction found an empty kind or
+to confirm a successful patch; the framework already tracks those facts. Use
+`get_state` only when the current definition is needed for a real correction.
+Optional
 `web_search` is for resolving a real ambiguity, not a mandatory admission
 step.
 

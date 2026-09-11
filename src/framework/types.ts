@@ -35,7 +35,7 @@ export type AgentProfile = {
   model?: ModelChoice;
   thinking?: ThinkingLevel;
   tools?: string[];
-  /** Enables framework-owned get_state, patch_state, and finalize_state tools. */
+  /** Enables framework-owned get_state, patch_state, patch_state_batch, and finalize_state tools. */
   contractState?: ContractStateConfig;
   outputSchema?: JsonSchema;
   /** Trusted postprocessor configuration; never exposed as an LLM-visible tool. */

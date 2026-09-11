@@ -5,8 +5,9 @@ import type { ContractStateConfig, JsonSchema } from "./types.ts";
 
 export const GET_STATE_TOOL = "get_state";
 export const PATCH_STATE_TOOL = "patch_state";
+export const PATCH_STATE_BATCH_TOOL = "patch_state_batch";
 export const FINALIZE_STATE_TOOL = "finalize_state";
-export const CONTRACT_STATE_TOOL_NAMES = [GET_STATE_TOOL, PATCH_STATE_TOOL, FINALIZE_STATE_TOOL] as const;
+export const CONTRACT_STATE_TOOL_NAMES = [GET_STATE_TOOL, PATCH_STATE_TOOL, PATCH_STATE_BATCH_TOOL, FINALIZE_STATE_TOOL] as const;
 
 export type ContractStateKind = "criterion" | "attribute";
 export type ContractItem = Record<string, unknown>;
@@ -39,7 +40,18 @@ type RemovePatch = {
   item_id: string;
 };
 
-type ContractPatch = UpsertPatch | RemovePatch;
+export type ContractPatch = UpsertPatch | RemovePatch;
+
+export type ContractPatchReceiptItem =
+  | { op: "upsert"; kind: ContractStateKind; item_id: string }
+  | { op: "remove"; item_id: string };
+
+export type ContractPatchReceipt = {
+  ok: true;
+  applied: ContractPatchReceiptItem[];
+  criteria_count: number;
+  attribute_count: number;
+};
 
 const NO_ARGUMENTS_SCHEMA: JsonSchema = {
   type: "object",
@@ -246,6 +258,17 @@ function patchSchema(config: ContractStateConfig): JsonSchema {
   };
 }
 
+function patchBatchSchema(config: ContractStateConfig): JsonSchema {
+  return {
+    type: "object",
+    properties: {
+      patches: { type: "array", items: patchSchema(config) },
+    },
+    required: ["patches"],
+    additionalProperties: false,
+  };
+}
+
 function stateResult(tool: string, state: ContractState): { content: [{ type: "text"; text: string }]; details: Record<string, unknown> } {
   return {
     content: [{ type: "text", text: JSON.stringify(state) }],
@@ -253,9 +276,45 @@ function stateResult(tool: string, state: ContractState): { content: [{ type: "t
   };
 }
 
+function patchReceipt(tool: string, receipt: ContractPatchReceipt): { content: [{ type: "text"; text: string }]; details: Record<string, unknown> } {
+  return {
+    content: [{ type: "text", text: JSON.stringify(receipt) }],
+    details: { tool, ...receipt },
+  };
+}
+
+function preparePatchArgument(value: unknown): unknown {
+  if (!isRecord(value) || value.op !== "upsert" || typeof value.item !== "string") return value;
+  try {
+    const item = JSON.parse(value.item) as unknown;
+    return isRecord(item) ? { ...value, item } : value;
+  } catch {
+    return value;
+  }
+}
+
+function preparePatchBatchArguments(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.patches)) return value;
+  let changed = false;
+  const patches = value.patches.map((patch) => {
+    const prepared = preparePatchArgument(patch);
+    if (prepared !== patch) changed = true;
+    return prepared;
+  });
+  return changed ? { ...value, patches } : value;
+}
+
+type AppliedPatch = ContractPatchReceiptItem;
+
+type ContractStateMutation = {
+  state: ContractState;
+  applied: AppliedPatch[];
+};
+
 export class ContractStateStore {
   readonly config: ContractStateConfig;
   readonly patchSchema: JsonSchema;
+  readonly patchBatchSchema: JsonSchema;
   private current: ContractState;
   private finalizedState?: ContractState;
   private readonly onFinalize?: ContractStateFinalizeHook;
@@ -269,6 +328,7 @@ export class ContractStateStore {
     validateContractStateConfig(config);
     this.config = config;
     this.patchSchema = patchSchema(config);
+    this.patchBatchSchema = patchBatchSchema(config);
     this.current = validateContractState(config, addRuntimeDefaults(config, initialState));
     this.onFinalize = options.onFinalize;
     this.onUpsert = options.runtime?.onUpsert;
@@ -286,45 +346,112 @@ export class ContractStateStore {
     return this.finalizedState ? clone(this.finalizedState) : undefined;
   }
 
-  patch(value: unknown): ContractState {
+  private assertMutable(): void {
     if (this.isFinalized) throw new Error("contract state is already finalized.");
-    const validation = validateJsonSchema(this.patchSchema, value);
-    if (!validation.valid) throw new Error(`patch_state arguments do not match the contract schema: ${validation.error}`);
-    const patch = value as ContractPatch;
-    const next = clone(this.current);
+  }
 
+  private normalizePatch(value: unknown, path: string, tool: string): ContractPatch {
+    const validation = validateJsonSchema(this.patchSchema, value, path);
+    if (!validation.valid) throw new Error(`${tool} arguments do not match the contract schema: ${validation.error}`);
+    if (!isRecord(value)) throw new Error(`${path} must be an object.`);
+    if (value.op === "remove") {
+      return { op: "remove", item_id: value.item_id as string };
+    }
+    return {
+      op: value.op as "upsert",
+      kind: value.kind as ContractStateKind,
+      item: validateItem(this.config, value.kind as ContractStateKind, value.item, `${path}.item`),
+    };
+  }
+
+  private normalizeBatch(value: unknown): ContractPatch[] {
+    const validation = validateJsonSchema(this.patchBatchSchema, value);
+    if (!validation.valid) throw new Error(`patch_state_batch arguments do not match the contract schema: ${validation.error}`);
+    if (!isRecord(value) || !Array.isArray(value.patches)) throw new Error("patch_state_batch patches must be an array.");
+    return value.patches.map((patch, index) => this.normalizePatch(patch, `$.patches[${index}]`, PATCH_STATE_BATCH_TOOL));
+  }
+
+  private applyPatch(next: ContractState, patch: ContractPatch): AppliedPatch {
     if (patch.op === "remove") {
       next.criteria = next.criteria.filter((item) => itemId(item) !== patch.item_id);
       next.attributes = next.attributes.filter((item) => itemId(item) !== patch.item_id);
-    } else {
-      const collection = collectionFor(patch.kind);
-      const otherCollection = collection === "criteria" ? "attributes" : "criteria";
-      const definition = validateItem(this.config, patch.kind, patch.item, `$.item`);
-      const id = itemId(definition);
-      const existing = [...next.criteria, ...next.attributes].find((candidate) => itemId(candidate) === id);
-      const runtime = {
-        ...runtimeDefaults(this.config),
-        ...(existing ? runtimeMetadata(this.config, existing) : {}),
-      };
-      const updates = this.onUpsert?.(patch.kind, clone(definition), existing ? clone(existing) : undefined);
-      if (updates !== undefined) {
-        if (!isRecord(updates)) throw new Error("contract state runtime upsert metadata must be an object.");
-        const fields = runtimeFieldNames(this.config);
-        const invalid = Object.keys(updates).find((key) => !fields.has(key));
-        if (invalid) throw new Error(`contract state runtime upsert cannot modify definition field '${invalid}'.`);
-        Object.assign(runtime, clone(updates));
-      }
-      const item = { ...definition, ...runtime };
-      const targetIndex = next[collection].findIndex((existing) => itemId(existing) === id);
-      if (targetIndex >= 0) next[collection][targetIndex] = item;
-      else {
-        next[otherCollection] = next[otherCollection].filter((existing) => itemId(existing) !== id);
-        next[collection].push(item);
-      }
+      return { op: "remove", item_id: patch.item_id };
     }
 
-    this.current = validateContractState(this.config, next);
-    return this.get();
+    const collection = collectionFor(patch.kind);
+    const otherCollection = collection === "criteria" ? "attributes" : "criteria";
+    const definition = clone(patch.item);
+    const id = itemId(definition);
+    const existing = [...next.criteria, ...next.attributes].find((candidate) => itemId(candidate) === id);
+    const runtime = {
+      ...runtimeDefaults(this.config),
+      ...(existing ? runtimeMetadata(this.config, existing) : {}),
+    };
+    const updates = this.onUpsert?.(patch.kind, clone(definition), existing ? clone(existing) : undefined);
+    if (updates !== undefined) {
+      if (!isRecord(updates)) throw new Error("contract state runtime upsert metadata must be an object.");
+      const fields = runtimeFieldNames(this.config);
+      const invalid = Object.keys(updates).find((key) => !fields.has(key));
+      if (invalid) throw new Error(`contract state runtime upsert cannot modify definition field '${invalid}'.`);
+      Object.assign(runtime, clone(updates));
+    }
+    const item = { ...definition, ...runtime };
+    const targetIndex = next[collection].findIndex((existing) => itemId(existing) === id);
+    if (targetIndex >= 0) next[collection][targetIndex] = item;
+    else {
+      next[otherCollection] = next[otherCollection].filter((existing) => itemId(existing) !== id);
+      next[collection].push(item);
+    }
+    return { op: "upsert", kind: patch.kind, item_id: id };
+  }
+
+  private commitPatches(patches: readonly ContractPatch[]): ContractStateMutation {
+    this.assertMutable();
+    let next = clone(this.current);
+    const applied: AppliedPatch[] = [];
+    for (const patch of patches) {
+      applied.push(this.applyPatch(next, patch));
+      next = validateContractState(this.config, next);
+    }
+    const state = next;
+    this.current = state;
+    return { state: this.get(), applied };
+  }
+
+  patch(value: unknown): ContractState {
+    this.assertMutable();
+    const patch = this.normalizePatch(value, "$", PATCH_STATE_TOOL);
+    return this.commitPatches([patch]).state;
+  }
+
+  patchWithReceipt(value: unknown): ContractPatchReceipt {
+    this.assertMutable();
+    const patch = this.normalizePatch(value, "$", PATCH_STATE_TOOL);
+    const result = this.commitPatches([patch]);
+    return {
+      ok: true,
+      applied: result.applied,
+      criteria_count: result.state.criteria.length,
+      attribute_count: result.state.attributes.length,
+    };
+  }
+
+  patchBatch(value: unknown): ContractState {
+    this.assertMutable();
+    const patches = this.normalizeBatch(value);
+    return this.commitPatches(patches).state;
+  }
+
+  patchBatchWithReceipt(value: unknown): ContractPatchReceipt {
+    this.assertMutable();
+    const patches = this.normalizeBatch(value);
+    const result = this.commitPatches(patches);
+    return {
+      ok: true,
+      applied: result.applied,
+      criteria_count: result.state.criteria.length,
+      attribute_count: result.state.attributes.length,
+    };
   }
 
   /** Apply a trusted runtime-only mutation; LLM patch inputs never use this path. */
@@ -391,17 +518,24 @@ export function createContractStateTools(
       description: "Upsert one complete contract item or remove one item by its global id.",
       parameters: store.patchSchema,
       prepareArguments(args) {
-        if (!isRecord(args) || args.op !== "upsert" || typeof args.item !== "string") return args as any;
-        try {
-          const item = JSON.parse(args.item) as unknown;
-          return isRecord(item) ? { ...args, item } as any : args as any;
-        } catch {
-          return args as any;
-        }
+        return preparePatchArgument(args) as any;
       },
       executionMode: "sequential",
       async execute(_toolCallId, params) {
-        return stateResult(PATCH_STATE_TOOL, store.patch(params));
+        return patchReceipt(PATCH_STATE_TOOL, store.patchWithReceipt(params));
+      },
+    },
+    {
+      name: PATCH_STATE_BATCH_TOOL,
+      label: PATCH_STATE_BATCH_TOOL,
+      description: "Atomically upsert or remove multiple complete contract items.",
+      parameters: store.patchBatchSchema,
+      prepareArguments(args) {
+        return preparePatchBatchArguments(args) as any;
+      },
+      executionMode: "sequential",
+      async execute(_toolCallId, params) {
+        return patchReceipt(PATCH_STATE_BATCH_TOOL, store.patchBatchWithReceipt(params));
       },
     },
     {
