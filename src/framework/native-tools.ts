@@ -4,9 +4,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
+import { DEFAULT_RUNTIME_CONFIG, resolveToolLlm } from "./config.ts";
 import { messageText } from "./content.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
-import type { NativeToolRuntimeContext } from "./types.ts";
+import type { NativeToolRuntimeContext, RuntimeLlmConfig, RuntimeLlmSettings } from "./types.ts";
 import { createProductExtractorTool, EXTRACT_PRODUCT_TOOL, type ProductExtractionInput, type ProductExtractionOutput } from "./product-extractor.ts";
 import { SEMANTIC_MATCH_BATCH_TOOL } from "./semantic-matcher.ts";
 
@@ -16,8 +17,6 @@ export { SEMANTIC_MATCH_BATCH_TOOL, SEMANTIC_MATCH_TOOL } from "./semantic-match
 export const WEB_SEARCH_TOOL = "web_search";
 export const DEVELOPER_ISSUE_TOOL = "report_developer_issue";
 export const NATIVE_TOOL_NAMES = [WEB_SEARCH_TOOL, DEVELOPER_ISSUE_TOOL, EXTRACT_PRODUCT_TOOL, SEMANTIC_MATCH_BATCH_TOOL] as const;
-export const WEB_SEARCH_MODEL = "mimo-v2.5";
-export const WEB_SEARCH_THINKING = "off" as const;
 export const SEARCH_TRUNCATION_MARKER = "[搜索结果因长度限制已截断]";
 export const SEARCH_RESULT_MAX_CHARS = 8_000;
 export const MIN_CRITERIA_SEARCH_QUERIES = 4;
@@ -29,7 +28,7 @@ export type NativeToolDefinition = {
 };
 
 const NATIVE_TOOL_DEFINITIONS: readonly NativeToolDefinition[] = [
-  { name: WEB_SEARCH_TOOL, description: "Research one query through an isolated fixed-model context." },
+  { name: WEB_SEARCH_TOOL, description: "Research one query through an isolated model context." },
   { name: DEVELOPER_ISSUE_TOOL, description: "Append a bounded developer diagnostic with trusted framework metadata." },
   { name: EXTRACT_PRODUCT_TOOL, description: "Extract one product's detected dimensions as complete canonical definitions in an isolated model context." },
   { name: SEMANTIC_MATCH_BATCH_TOOL, description: "Match all candidates from one isolated product to the current canonical contract by semantic identity." },
@@ -48,6 +47,8 @@ export function criteriaSearchSatisfied(stats: Pick<SearchStats, "attempted" | "
 
 export type NativeToolFactoryOptions = {
   runtime: ModelRuntime;
+  /** Runtime LLM config used to resolve model-backed native tools. */
+  llm?: RuntimeLlmConfig;
   projectRoot: string;
   getRuntimeContext: () => NativeToolRuntimeContext;
   webSearchPrompt?: string;
@@ -124,14 +125,15 @@ async function runIsolatedSearch(
   runtime: ModelRuntime,
   systemPrompt: string,
   query: string,
+  llm: RuntimeLlmSettings,
 ): Promise<string> {
-  const model = runtime.getModel(WEB_SEARCH_MODEL);
-  runtime.ensureThinking(model, WEB_SEARCH_THINKING);
+  const model = runtime.getModel(llm.model);
+  runtime.ensureThinking(model, llm.thinking);
   const agent = new Agent({
     initialState: {
       systemPrompt: systemPrompt.trim(),
       model,
-      thinkingLevel: WEB_SEARCH_THINKING,
+      thinkingLevel: llm.thinking,
       tools: [],
       messages: [],
     },
@@ -173,6 +175,7 @@ function createSearchTool(
   searchStats: SearchStats,
 ): AgentTool<any> {
   const prompt = searchPrompt(options.projectRoot, options.webSearchPrompt);
+  const llm = resolveToolLlm(options.llm ?? DEFAULT_RUNTIME_CONFIG.llm, "webSearch");
   return {
     name: WEB_SEARCH_TOOL,
     label: WEB_SEARCH_TOOL,
@@ -189,7 +192,7 @@ function createSearchTool(
       let lastError: unknown;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const result = await runIsolatedSearch(options.runtime, prompt, query);
+          const result = await runIsolatedSearch(options.runtime, prompt, query, llm);
           searchStats.succeeded += 1;
           return { content: [{ type: "text", text: result }], details: { tool: WEB_SEARCH_TOOL } };
         } catch (error) {
@@ -248,6 +251,7 @@ export function createNativeAgentToolSet(
       tools.push(createProductExtractorTool({
         runtime: options.runtime,
         projectRoot: options.projectRoot,
+        llm: resolveToolLlm(options.llm ?? DEFAULT_RUNTIME_CONFIG.llm, "productExtractor"),
         onSuccess: options.onProductExtracted,
       }));
     }

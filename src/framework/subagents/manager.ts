@@ -3,7 +3,8 @@ import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
-import type { AgentToolUpdateCallback, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
+import { resolveAgentLlm, resolveSubagentTimeout } from "../config.ts";
 import type {
   PythonToolDefinition,
   ResolvedAgentProfile,
@@ -11,6 +12,7 @@ import type {
   RunDetail,
   RunEvent,
   RunSummary,
+  RuntimeLlmOverride,
   SubagentUpdateDetails,
 } from "../types.ts";
 import type { PythonExecutor } from "../python-executor.ts";
@@ -20,7 +22,7 @@ import { emptyContractState, isContractStateToolName, validateContractState, typ
 import type { ChildEvent, ChildRequest } from "./protocol.ts";
 import { NoopTracing, type TraceObservation, type Tracing } from "../tracing/index.ts";
 
-type AgentOverride = { model?: string; thinking?: ThinkingLevel };
+type AgentOverride = RuntimeLlmOverride;
 
 export type RunOptions = {
   profile: ResolvedAgentProfile;
@@ -29,6 +31,8 @@ export type RunOptions = {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
   override?: AgentOverride;
+  /** Optional full session override map used by internally chained stages. */
+  overrides?: Record<string, AgentOverride>;
 };
 
 export type RunResult = { text: string; value?: unknown; runId: string };
@@ -96,14 +100,19 @@ export class SubagentManager {
   private async runSingleObserved(options: RunOptions, observation?: TraceObservation): Promise<RunResult> {
     const runId = randomUUID();
     const sessionId = options.sessionId ?? runId;
+    const llm = resolveAgentLlm(
+      this.config.runtime,
+      options.profile.id,
+      options.override ?? options.overrides?.[options.profile.id],
+    );
     const detail: RunDetail = {
       id: runId,
       agent: options.profile.id,
       task: options.task,
       state: "starting",
       startedAt: new Date().toISOString(),
-      model: options.override?.model ?? options.profile.model?.id ?? this.config.defaultModel,
-      thinking: options.override?.thinking ?? options.profile.thinking ?? this.config.defaultThinking,
+      model: llm.model,
+      thinking: llm.thinking,
       events: [],
     };
     this.runs.set(runId, detail);
@@ -127,7 +136,8 @@ export class SubagentManager {
       projectRoot: this.config.cwd,
       dataDirectory: this.config.dataDirectory,
       datasetPath: this.config.datasetPath,
-      maxDistinctProducts: this.config.maxDistinctProducts,
+      maxDistinctProducts: this.config.runtime.market.maxDistinctProducts,
+      llm: this.config.runtime.llm,
       task: options.task,
       profile: options.profile,
       model: detail.model,
@@ -265,6 +275,7 @@ export class SubagentManager {
         ...options,
         profile: marketProfile,
         task: this.marketTask(options.task),
+        override: options.overrides?.[marketProfile.id],
       });
       chain?.update({ output: result.value ?? result.text, metadata: { cache: "base", hit: true } });
       return result;
@@ -274,6 +285,7 @@ export class SubagentManager {
       ...options,
       profile: marketProfile,
       task: this.marketTask(options.task),
+      override: options.overrides?.[marketProfile.id],
     });
     chain?.update({ output: result.value ?? result.text, metadata: { cache: "miss" } });
     return result;
@@ -344,6 +356,7 @@ export class SubagentManager {
     const pythonRequests = new Map<string, AbortController>();
 
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutMs = resolveSubagentTimeout(this.config.runtime, request.profile);
     const requestStop = (reason: "user" | "timeout") => {
       if (child.stdin.writable) child.stdin.write(`${JSON.stringify({ type: "abort", reason })}\n`);
       stopTimer ??= setTimeout(() => this.terminate(child), 3_000);
@@ -352,7 +365,7 @@ export class SubagentManager {
     const timeout = setTimeout(() => {
       timedOut = true;
       requestStop("timeout");
-    }, request.profile.timeoutMs ?? 120_000);
+    }, timeoutMs);
     signal?.addEventListener("abort", abort, { once: true });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -436,7 +449,7 @@ export class SubagentManager {
     });
 
     if (signal?.aborted) throw new Error(`Subagent '${request.profile.id}' was aborted.`);
-    if (timedOut) throw new Error(`Subagent '${request.profile.id}' timed out after ${request.profile.timeoutMs ?? 120_000}ms.`);
+    if (timedOut) throw new Error(`Subagent '${request.profile.id}' timed out after ${timeoutMs}ms.`);
     if (exitCode !== 0 || childError || !finalResult) {
       throw new Error(childError ?? stderr.trim() ?? `Subagent exited with code ${exitCode}.`);
     }

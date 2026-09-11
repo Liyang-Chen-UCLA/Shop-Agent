@@ -73,7 +73,6 @@ export const agents: AgentProfile[] = [
       runtimeItemDefaults: { observed_product_ids: [] },
       runtimeMutableFields: ["aliases", "observed_product_ids"],
     },
-    timeoutMs: 600_000,
     maxRetries: 0,
   },
   {

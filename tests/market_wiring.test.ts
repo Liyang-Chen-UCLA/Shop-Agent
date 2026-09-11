@@ -17,7 +17,7 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   });
   assert.equal(config.datasetPath, path.resolve(cwd, "data/taobao-product-context/data/products.parquet"));
   assert.equal(config.dataDirectory, path.resolve(cwd, ".shop-agent"));
-  assert.equal(config.maxDistinctProducts, 5);
+  assert.equal(config.runtime.market.maxDistinctProducts, 5);
   const market = config.agents.find((agent) => agent.id === "market_agent");
   assert.ok(market);
   const research = config.agents.find((agent) => agent.id === "research_agent");
@@ -37,8 +37,7 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(research?.systemPrompt ?? "", /call `finalize_state`/);
   assert.doesNotMatch(research?.systemPrompt ?? "", /submit the final structured result using the `submit_result` tool/);
   const routeAgent = config.agents.find((agent) => agent.id === "route_agent");
-  assert.equal(routeAgent?.model, undefined);
-  assert.equal(routeAgent?.thinking, undefined);
+  assert.deepEqual(config.runtime.llm.agents.route_agent, {});
   assert.match(routeAgent?.systemPrompt ?? "", /submitted\s+result must use exactly this wrapper/);
   assert.match(routeAgent?.systemPrompt ?? "", /"results": \[\s+\{\s+"product": "\.\.\."/);
   assert.match(routeAgent?.systemPrompt ?? "", /even when there is only one product/i);
@@ -50,8 +49,7 @@ test("wires the narrow market profile, repo skill, dataset config, and tools", a
   assert.match(orchestrator?.systemPrompt ?? "", /exactly one research-agent delegation in that user turn/);
   assert.match(orchestrator?.systemPrompt ?? "", /do not manually call `delegate_agent` for `research_agent` again in the same turn/);
   assert.equal(market?.webSearchPolicy, "market");
-  assert.equal(market?.model, undefined);
-  assert.equal(market?.thinking, undefined);
+  assert.deepEqual(config.runtime.llm.agents.market_agent, {});
   assert.equal(market?.outputValidator, undefined);
   assert.equal(market?.outputSchema, undefined);
   assert.deepEqual(market?.tools, ["shopping_env", "extract_product", "semantic_match_batch", "get_state", "patch_state", "patch_state_batch", "finalize_state", "web_search", "report_developer_issue"]);

@@ -3,16 +3,16 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
+import { DEFAULT_RUNTIME_CONFIG, resolveToolLlm } from "./config.ts";
 import { messageText } from "./content.ts";
 import { validateJsonSchema } from "./schema.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { ContractItem } from "./contract-state.ts";
+import type { RuntimeLlmSettings } from "./types.ts";
 import { extractProductInputSchema, productExtractionOutputSchema } from "../../shop/schemas.ts";
 
 export const EXTRACT_PRODUCT_TOOL = "extract_product";
 export const SUBMIT_PRODUCT_EXTRACTION_TOOL = "submit_product_extraction";
-export const PRODUCT_EXTRACTOR_MODEL = "hy3";
-export const PRODUCT_EXTRACTOR_THINKING = "off" as const;
 
 export type ProductExtractionInput = {
   item_id: string;
@@ -28,6 +28,9 @@ export type ProductExtractionOutput = {
 export type ProductExtractorOptions = {
   runtime: ModelRuntime;
   projectRoot: string;
+  /** Resolved runtime.llm.tools.productExtractor settings. */
+  llm?: RuntimeLlmSettings;
+  /** @deprecated Pass llm.model through the runtime config instead. */
   modelId?: string;
   onSuccess?: (input: ProductExtractionInput, output: ProductExtractionOutput) => void | Promise<void>;
 };
@@ -106,14 +109,16 @@ async function runIsolatedExtraction(
   signal?: AbortSignal,
 ): Promise<ProductExtractionOutput> {
   if (signal?.aborted) throw new Error("extract_product was aborted.");
-  const model = options.runtime.getModel(options.modelId ?? PRODUCT_EXTRACTOR_MODEL);
-  options.runtime.ensureThinking(model, PRODUCT_EXTRACTOR_THINKING);
+  const configuredLlm = options.llm ?? resolveToolLlm(DEFAULT_RUNTIME_CONFIG.llm, "productExtractor");
+  const llm = options.modelId === undefined ? configuredLlm : { ...configuredLlm, model: options.modelId };
+  const model = options.runtime.getModel(llm.model);
+  options.runtime.ensureThinking(model, llm.thinking);
   const state: SubmissionState = { submitted: false };
   const agent = new Agent({
     initialState: {
       systemPrompt: loadProductExtractionPrompt(options.projectRoot),
       model,
-      thinkingLevel: PRODUCT_EXTRACTOR_THINKING,
+      thinkingLevel: llm.thinking,
       tools: [createSubmissionTool(state)],
       messages: [],
     },

@@ -19,7 +19,7 @@ Market artifacts are written under `.shop-agent/market-criteria/<node_id>/`:
 canonical Market state. Product extraction remains in tool observations;
 product JSON files are not published. Existing `market.json` is reused; an
 existing `base.json` skips the criteria stage. The configured dataset path and
-`maxDistinctProducts` (default `5`) live in `shop-agent.config.ts`. Sampling is sorted by
+`runtime.market.maxDistinctProducts` (default `5`) lives in `shop-agent.config.ts`. Sampling is sorted by
 `rank` ascending then `item_id` ascending (the parquet order is otherwise
 ambiguous); all taxonomy nodes mapped to one Taobao category therefore receive
 the same configured sequence. The model-visible `shopping_env` tool accepts

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Agent, type AgentEvent, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { loadConfig } from "./config.ts";
+import { loadConfig, resolveAgentLlm } from "./config.ts";
 import { checkOpenCodeAuth, createModelRuntime, type ModelRuntime } from "./model-runtime.ts";
 import { discoverPythonTools, createPythonAgentTools } from "./python-tools.ts";
 import { createNativeAgentToolSet, isNativeToolName } from "./native-tools.ts";
@@ -94,12 +94,13 @@ export class ShopAgent {
     try {
       const runtime = createModelRuntime(tracing);
       if (!options.skipAuthCheck) await checkOpenCodeAuth(runtime);
-      const defaultModel = runtime.getModel(config.defaultModel);
-      runtime.ensureThinking(defaultModel, config.defaultThinking);
+      const orchestratorLlm = resolveAgentLlm(config.runtime, config.orchestrator);
+      const model = runtime.getModel(orchestratorLlm.model);
+      runtime.ensureThinking(model, orchestratorLlm.thinking);
       const dataDirectory = config.dataDirectory;
       const sessions = new SessionStore(dataDirectory);
       const logger = new Logger(dataDirectory);
-      const session = await sessions.create(config.defaultModel, config.defaultThinking);
+      const session = await sessions.create(orchestratorLlm.model, orchestratorLlm.thinking);
       const subagents = new SubagentManager(config, definitions, python, tracing);
       const placeholder = new Agent({ streamFn: runtime.streamSimple });
       const app = new ShopAgent(config, runtime, sessions, logger, subagents, python, tracing, definitions, session, placeholder);
@@ -132,12 +133,13 @@ export class ShopAgent {
         sessionId: this.session.metadata.id,
         dataDirectory: this.config.dataDirectory,
         datasetPath: this.config.datasetPath,
-        maxDistinctProducts: this.config.maxDistinctProducts,
+        maxDistinctProducts: this.config.runtime.market.maxDistinctProducts,
         agentName: profile.id,
       }),
     );
     const nativeTools = createNativeAgentToolSet(allowlist, {
       runtime: this.runtime,
+      llm: this.config.runtime.llm,
       projectRoot: this.config.cwd,
       getRuntimeContext: () => ({
         sessionId: this.session.metadata.id,
@@ -247,7 +249,8 @@ export class ShopAgent {
 
   async newSession(): Promise<SessionMetadata> {
     if (this.isBusy) throw new Error("Abort the current run before creating a new session.");
-    this.session = await this.sessions.create(this.config.defaultModel, this.config.defaultThinking);
+    const orchestratorLlm = resolveAgentLlm(this.config.runtime, this.config.orchestrator);
+    this.session = await this.sessions.create(orchestratorLlm.model, orchestratorLlm.thinking);
     this.replaceAgent(this.buildAgent(this.session));
     await this.emit({ type: "session_changed", session: this.session.metadata });
     return this.session.metadata;
@@ -298,7 +301,7 @@ export class ShopAgent {
     if (!target) throw new Error(`Unknown agent: ${agentId}`);
     const currentThinking = agentId === this.config.orchestrator
       ? this.session.metadata.thinking
-      : this.session.metadata.agentOverrides[agentId]?.thinking ?? target.thinking ?? this.config.defaultThinking;
+      : resolveAgentLlm(this.config.runtime, agentId, this.session.metadata.agentOverrides[agentId]).thinking;
     const thinking = this.runtime.resolveThinking(model, currentThinking);
     if (agentId === this.config.orchestrator) {
       this.session.metadata.model = modelId;
@@ -320,7 +323,7 @@ export class ShopAgent {
     if (!target) throw new Error(`Unknown agent: ${agentId}`);
     const modelId = agentId === this.config.orchestrator
       ? this.session.metadata.model
-      : this.session.metadata.agentOverrides[agentId]?.model ?? target.model?.id ?? this.config.defaultModel;
+      : resolveAgentLlm(this.config.runtime, agentId, this.session.metadata.agentOverrides[agentId]).model;
     const model = this.runtime.getModel(modelId);
     this.runtime.ensureThinking(model, thinking);
     if (agentId === this.config.orchestrator) {

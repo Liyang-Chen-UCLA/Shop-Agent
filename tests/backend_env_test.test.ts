@@ -102,7 +102,7 @@ async function fixture() {
     cwd: directory,
     dataDirectory: directory,
     datasetPath: path.join(directory, "products.parquet"),
-    maxDistinctProducts: 5,
+    runtime: { market: { maxDistinctProducts: 5 } },
     python: { timeoutMs: 10_000, envAllowlist: [] },
     toolDirectories: ["shop/tools"],
   };
@@ -185,8 +185,8 @@ test("probes the real dog-food backend env without creating a model run", async 
   }
   const scenario = BACKEND_ENV_TEST_SCENARIOS[0]!;
   const samples = await probeBackendEnv(scenario, config);
-  assert.equal(samples.length, config.maxDistinctProducts);
+  assert.equal(samples.length, config.runtime.market.maxDistinctProducts);
   assert.deepEqual(samples.map((sample) => sample.sample_index), [1, 2, 3, 4, 5]);
-  assert.equal(new Set(samples.map((sample) => sample.item_id)).size, config.maxDistinctProducts);
+  assert.equal(new Set(samples.map((sample) => sample.item_id)).size, config.runtime.market.maxDistinctProducts);
   assert.ok(samples.every((sample) => sample.category === scenario.datasetCategory));
 });

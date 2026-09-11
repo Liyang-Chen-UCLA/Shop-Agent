@@ -86,8 +86,10 @@ export const BACKEND_ENV_TEST_SCENARIOS: readonly BackendEnvScenario[] = [
 
 export type BackendEnvTestConfig = Pick<
   ResolvedConfig,
-  "cwd" | "dataDirectory" | "datasetPath" | "maxDistinctProducts" | "python" | "toolDirectories"
->;
+  "cwd" | "dataDirectory" | "datasetPath" | "python" | "toolDirectories"
+> & {
+  runtime: Pick<ResolvedConfig["runtime"], "market">;
+};
 
 /** Narrow app surface required by this runner; a fake can implement it offline. */
 export type BackendEnvTestApp = {
@@ -183,8 +185,9 @@ function validateSampleSummaries(
   scenario: BackendEnvScenario,
   config: BackendEnvTestConfig,
 ): void {
-  if (samples.length !== config.maxDistinctProducts) {
-    throw new Error(`Backend env ${scenario.id} returned ${samples.length} samples; expected ${config.maxDistinctProducts}.`);
+  const maxDistinctProducts = config.runtime.market.maxDistinctProducts;
+  if (samples.length !== maxDistinctProducts) {
+    throw new Error(`Backend env ${scenario.id} returned ${samples.length} samples; expected ${maxDistinctProducts}.`);
   }
   const ids = new Set<string>();
   for (const [index, sample] of samples.entries()) {
@@ -244,6 +247,7 @@ export async function probeBackendEnv(
   config: BackendEnvTestConfig,
   sharedPython?: PythonExecutor,
 ): Promise<readonly BackendEnvSampleSummary[]> {
+  const maxDistinctProducts = config.runtime.market.maxDistinctProducts;
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "shop-agent-backend-env-"));
   let ownedPython: PythonWorker | undefined;
   try {
@@ -252,7 +256,7 @@ export async function probeBackendEnv(
       runId: randomUUID(),
       dataDirectory: temporaryDirectory,
       datasetPath: config.datasetPath,
-      maxDistinctProducts: config.maxDistinctProducts,
+      maxDistinctProducts,
       agentName: "backend_env_test",
     };
     const definitions = await discoverPythonTools(config.cwd, config.toolDirectories);
@@ -281,7 +285,7 @@ export async function probeBackendEnv(
     }
 
     const samples: BackendEnvSampleSummary[] = [];
-    while (samples.length < config.maxDistinctProducts) {
+    while (samples.length < maxDistinctProducts) {
       const value = parsePythonToolResult(
         await shopping.execute(`backend-env-shopping-${randomUUID()}`, {}),
         "shopping_env",
@@ -293,8 +297,8 @@ export async function probeBackendEnv(
       if (sample.dataset_category !== scenario.datasetCategory || sample.category !== scenario.datasetCategory) {
         throw new Error(`shopping_env returned the wrong category for ${scenario.id}.`);
       }
-      if (sample.sample_limit !== config.maxDistinctProducts) {
-        throw new Error(`shopping_env returned sample_limit ${String(sample.sample_limit)} for ${scenario.id}; expected ${config.maxDistinctProducts}.`);
+      if (sample.sample_limit !== maxDistinctProducts) {
+        throw new Error(`shopping_env returned sample_limit ${String(sample.sample_limit)} for ${scenario.id}; expected ${maxDistinctProducts}.`);
       }
       if (typeof sample.item_id !== "string" || !/^[A-Za-z0-9._-]+$/.test(sample.item_id)) {
         throw new Error(`shopping_env returned an invalid item_id for ${scenario.id}.`);
@@ -409,8 +413,9 @@ export async function runBackendEnvTest(
 ): Promise<BackendEnvTestResult> {
   const scenarios = options.scenarios ?? BACKEND_ENV_TEST_SCENARIOS;
   if (!scenarios.length) throw new Error("Backend env test requires at least one scenario.");
-  if (!Number.isInteger(app.config.maxDistinctProducts) || app.config.maxDistinctProducts <= 0) {
-    throw new Error("Backend env test requires a positive maxDistinctProducts config.");
+  const maxDistinctProducts = app.config.runtime.market.maxDistinctProducts;
+  if (!Number.isInteger(maxDistinctProducts) || maxDistinctProducts <= 0) {
+    throw new Error("Backend env test requires a positive runtime.market.maxDistinctProducts config.");
   }
   const probe = options.probe ?? probeBackendEnv;
   const turns: BackendEnvTestTurn[] = [];

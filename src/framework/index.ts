@@ -1,8 +1,8 @@
-export { defineConfig } from "./config.ts";
+export { DEFAULT_CONFIG, DEFAULT_RUNTIME_CONFIG, defineConfig, loadConfig, resolveAgentLlm, resolveEvalLlm, resolveSubagentTimeout, resolveToolLlm } from "./config.ts";
 export { createShopAgent, ShopAgent, type CreateShopAgentOptions } from "./shop-agent.ts";
 export { PythonWorker, resolveVenvPython } from "./python-worker.ts";
 export type { PythonExecutor } from "./python-executor.ts";
-export { EXTRACT_PRODUCT_TOOL, PRODUCT_EXTRACTOR_MODEL, PRODUCT_EXTRACTOR_THINKING, SUBMIT_PRODUCT_EXTRACTION_TOOL, createExtractProductTool, createProductExtractorTool, validateProductExtraction, validateProductExtractionInput } from "./product-extractor.ts";
+export { EXTRACT_PRODUCT_TOOL, SUBMIT_PRODUCT_EXTRACTION_TOOL, createExtractProductTool, createProductExtractorTool, validateProductExtraction, validateProductExtractionInput } from "./product-extractor.ts";
 export type { ProductExtractionInput, ProductExtractionOutput, ProductExtractorOptions } from "./product-extractor.ts";
 export { CONTRACT_STATE_TOOL_NAMES, ContractStateStore, createContractStateTools, emptyContractState, FINALIZE_STATE_TOOL, GET_STATE_TOOL, isContractStateToolName, PATCH_STATE_BATCH_TOOL, PATCH_STATE_TOOL, validateContractState, validateContractStateConfig } from "./contract-state.ts";
 export type { ContractItem, ContractPatch, ContractPatchReceipt, ContractPatchReceiptItem, ContractState, ContractStateFinalizeHook, ContractStateKind, ContractStateToolOptions, ContractStateToolSet, ContractStateUpsertRuntimeHook } from "./contract-state.ts";
@@ -17,6 +17,15 @@ export type {
   OutputValidatorConfig,
   PromptSource,
   PythonToolDefinition,
+  RuntimeConfig,
+  RuntimeConfigInput,
+  RuntimeLlmConfig,
+  RuntimeLlmEval,
+  RuntimeLlmOverride,
+  RuntimeLlmSettings,
+  RuntimeLlmTools,
+  RuntimeMarketConfig,
+  RuntimeTimeoutConfig,
   ShopAgentPaths,
   ShopAgentConfig,
   ShopAgentConfigInput,

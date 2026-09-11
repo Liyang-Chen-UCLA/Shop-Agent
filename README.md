@@ -46,10 +46,10 @@ uvx --from huggingface-hub hf download Helios1208/taobao-product-context `
 - [`docs/architecture.md`](./docs/architecture.md)：架构边界与运行流程。
 - [`docs/backlog/`](./docs/backlog/)：明确暂缓的后续能力。
 
-默认使用 OpenCode Go 的 `hy3`，思考级别为 `off`。在 TUI 中输入 `/help` 查看命令，使用 `/model` 切换模型。
+默认使用 `shop-agent.config.ts` 中 `runtime.llm.default` 配置的模型（当前为 `mimo-v2.5`），思考级别为 `off`。在 TUI 中输入 `/help` 查看命令，使用 `/model` 切换模型。
 
 市场分析阶段使用 `shop-agent.config.ts` 中的固定 parquet 数据集和
-`maxDistinctProducts`（默认值为 `5`）。结果缓存于 `.shop-agent/market-criteria/<node_id>/`：
+`runtime.market.maxDistinctProducts`（默认值为 `5`）。结果缓存于 `.shop-agent/market-criteria/<node_id>/`：
 先生成 `base.json`，再生成配置数量的 `products/<item_id>.json`，最后发布
 `market.json`。已有 `market.json` 会直接复用；只有 `base.json` 时跳过标准
 阶段。采样按 `rank` 升序、`item_id` 升序，`shopping_env({})` 取下一个商品，

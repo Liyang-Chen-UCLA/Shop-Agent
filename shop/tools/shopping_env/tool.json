@@ -1,6 +1,6 @@
 {
   "name": "shopping_env",
-  "description": "Read the next deterministic product OCR context for the active mapped category. This tool accepts no arguments: call with {} until sample_index equals sample_limit (5), then pass the trusted item_id, dataset_category, and OCR to extract_product.",
+  "description": "Read the next deterministic product OCR context for the active mapped category. This tool accepts no arguments. Call until `sample_index` equals returned `sample_limit`, then pass the trusted item_id, dataset_category, and OCR to extract_product.",
   "entry": "main.py",
   "inputSchema": {
     "type": "object",

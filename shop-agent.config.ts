@@ -2,8 +2,6 @@ import { defineConfig } from "./src/framework/index.ts";
 import { agents } from "./shop/agents.ts";
 
 export default defineConfig({
-  defaultModel: "mimo-v2.5",
-  defaultThinking: "off",
   orchestrator: "orchestrator",
   agents,
   toolDirectories: ["shop/tools"],
@@ -11,5 +9,47 @@ export default defineConfig({
     dataset: "data/taobao-product-context/data/products.parquet",
     runtimeData: ".shop-agent",
   },
-  maxDistinctProducts: 5,
+  runtime: {
+    llm: {
+      default: {
+        model: "mimo-v2.5",
+        thinking: "off",
+      },
+
+      agents: {
+        orchestrator: {},
+        route_agent: {},
+        research_agent: {},
+        market_agent: {},
+        delegate: {},
+      },
+
+      tools: {
+        webSearch: {
+          model: "mimo-v2.5",
+          thinking: "off",
+        },
+        productExtractor: {
+          model: "hy3",
+          thinking: "off",
+        },
+      },
+
+      eval: {
+        semanticMatcher: {},
+        definitionJudge: {},
+      },
+    },
+
+    timeout: {
+      subagentDefaultMs: 120_000,
+      agents: {
+        market_agent: 600_000,
+      },
+    },
+
+    market: {
+      maxDistinctProducts: 5,
+    },
+  },
 });

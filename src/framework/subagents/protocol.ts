@@ -1,5 +1,5 @@
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { PythonToolDefinition, PythonToolRuntimeContext, ResolvedAgentProfile } from "../types.ts";
+import type { PythonToolDefinition, PythonToolRuntimeContext, ResolvedAgentProfile, RuntimeLlmConfig } from "../types.ts";
 import type { ContractState } from "../contract-state.ts";
 import type { TraceContext } from "../tracing/index.ts";
 
@@ -21,6 +21,8 @@ export type ChildRequest = {
   datasetPath: string;
   /** Trusted configured cap for distinct sampled products. */
   maxDistinctProducts: number;
+  /** Trusted runtime LLM settings used by the child agent's isolated tools. */
+  llm: RuntimeLlmConfig;
   task: string;
   profile: ResolvedAgentProfile;
   model: string;

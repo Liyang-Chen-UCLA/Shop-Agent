@@ -16,9 +16,58 @@ export type ContractStateConfig = {
   runtimeMutableFields?: string[];
 };
 
-export type ModelChoice = {
-  provider: "opencode-go";
-  id: string;
+export type RuntimeLlmSettings = {
+  model: string;
+  thinking: ThinkingLevel;
+};
+
+/** Partial LLM settings used for agent, tool, and evaluator overrides. */
+export type RuntimeLlmOverride = Partial<RuntimeLlmSettings>;
+
+export type RuntimeLlmTools = {
+  webSearch: RuntimeLlmOverride;
+  productExtractor: RuntimeLlmOverride;
+};
+
+export type RuntimeLlmEval = {
+  semanticMatcher: RuntimeLlmOverride;
+  definitionJudge: RuntimeLlmOverride;
+};
+
+export type RuntimeLlmConfig = {
+  default: RuntimeLlmSettings;
+  agents: Record<string, RuntimeLlmOverride>;
+  tools: RuntimeLlmTools;
+  eval: RuntimeLlmEval;
+};
+
+export type RuntimeTimeoutConfig = {
+  subagentDefaultMs: number;
+  agents: Record<string, number>;
+};
+
+export type RuntimeMarketConfig = {
+  maxDistinctProducts: number;
+};
+
+export type RuntimeConfig = {
+  llm: RuntimeLlmConfig;
+  timeout: RuntimeTimeoutConfig;
+  market: RuntimeMarketConfig;
+};
+
+export type RuntimeConfigInput = {
+  llm?: {
+    default?: RuntimeLlmOverride;
+    agents?: Record<string, RuntimeLlmOverride>;
+    tools?: Partial<RuntimeLlmTools>;
+    eval?: Partial<RuntimeLlmEval>;
+  };
+  timeout?: {
+    subagentDefaultMs?: number;
+    agents?: Record<string, number>;
+  };
+  market?: Partial<RuntimeMarketConfig>;
 };
 
 export type PromptSource = string | { file: string };
@@ -32,8 +81,6 @@ export type AgentProfile = {
   skill?: PromptSource;
   /** Search policy for the profile's native web_search tool. */
   webSearchPolicy?: "criteria" | "market";
-  model?: ModelChoice;
-  thinking?: ThinkingLevel;
   tools?: string[];
   /** Enables framework-owned get_state, patch_state, patch_state_batch, and finalize_state tools. */
   contractState?: ContractStateConfig;
@@ -61,19 +108,18 @@ export type ShopAgentPaths = {
 
 export type ShopAgentConfig = {
   provider: "opencode-go";
-  defaultModel: string;
-  defaultThinking: ThinkingLevel;
   orchestrator: string;
   agents: AgentProfile[];
   toolDirectories: string[];
   python: PythonConfig;
   paths: ShopAgentPaths;
-  maxDistinctProducts: number;
+  runtime: RuntimeConfig;
 };
 
-export type ShopAgentConfigInput = Partial<Omit<ShopAgentConfig, "python" | "paths">> & {
+export type ShopAgentConfigInput = Partial<Omit<ShopAgentConfig, "python" | "paths" | "runtime">> & {
   paths?: Partial<ShopAgentPaths>;
   python?: Partial<PythonConfig>;
+  runtime?: RuntimeConfigInput;
 };
 
 export type ResolvedAgentProfile = Omit<AgentProfile, "systemPrompt"> & {
@@ -129,7 +175,7 @@ export type SessionMetadata = {
   updatedAt: string;
   model: string;
   thinking: ThinkingLevel;
-  agentOverrides: Record<string, { model?: string; thinking?: ThinkingLevel }>;
+  agentOverrides: Record<string, RuntimeLlmOverride>;
 };
 
 export type LoadedSession = {

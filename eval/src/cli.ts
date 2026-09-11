@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { loadConfig } from "../../src/framework/config.ts";
+import { loadConfig, resolveEvalLlm } from "../../src/framework/config.ts";
 import { createModelRuntime } from "../../src/framework/model-runtime.ts";
 import { TaxonomySemanticMatchCache } from "../../src/framework/semantic-match-cache.ts";
 import { SessionStore } from "../../src/framework/session-store.ts";
@@ -64,11 +64,13 @@ async function main(): Promise<void> {
   const { telemetry, tracing } = createLangfuseEvalTelemetry();
   try {
     const runtime = createModelRuntime(tracing);
+    const semanticMatcherLlm = resolveEvalLlm(config.runtime, "semanticMatcher");
+    const definitionJudgeLlm = resolveEvalLlm(config.runtime, "definitionJudge");
     const matcher = new ModelSemanticMatcher(
       runtime,
-      config.defaultModel,
+      semanticMatcherLlm.model,
       session.metadata.id,
-      config.defaultThinking,
+      semanticMatcherLlm.thinking,
       {
         cache: new TaxonomySemanticMatchCache({
           runtimeData: config.dataDirectory,
@@ -79,9 +81,9 @@ async function main(): Promise<void> {
     );
     const definitionJudge = new ModelDefinitionJudge(
       runtime,
-      config.defaultModel,
+      definitionJudgeLlm.model,
       session.metadata.id,
-      config.defaultThinking,
+      definitionJudgeLlm.thinking,
     );
     const result = await runEvaluation({
       caseId,

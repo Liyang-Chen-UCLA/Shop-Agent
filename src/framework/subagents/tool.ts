@@ -1,9 +1,9 @@
 import { Type } from "@earendil-works/pi-ai";
-import type { AgentTool, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { ResolvedAgentProfile } from "../types.ts";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ResolvedAgentProfile, RuntimeLlmOverride } from "../types.ts";
 import { SubagentManager } from "./manager.ts";
 
-type Overrides = Record<string, { model?: string; thinking?: ThinkingLevel }>;
+type Overrides = Record<string, RuntimeLlmOverride>;
 
 export function createDelegationTool(
   profiles: ResolvedAgentProfile[],
@@ -44,12 +44,14 @@ export function createDelegationTool(
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: { action: "get", agent: profile.id } };
       }
       if (!params.task?.trim()) throw new Error("delegate_agent action 'run' requires a non-empty task.");
+      const overrides = getOverrides();
       const result = await manager.run({
         profile,
         task: params.task,
         signal,
         onUpdate,
-        override: getOverrides()[profile.id],
+        override: overrides[profile.id],
+        overrides,
         sessionId: getSessionId(),
       });
       return {

@@ -106,6 +106,7 @@ async function main(): Promise<void> {
   });
   const nativeToolSet = createNativeAgentToolSet(allowlist.filter((name) => name !== SEMANTIC_MATCH_BATCH_TOOL), {
     runtime,
+    llm: request.llm,
     projectRoot: request.projectRoot,
     getRuntimeContext: () => ({ sessionId: request.sessionId, agentName: request.profile.id, projectRoot: request.projectRoot }),
     webSearchPolicy: request.profile.webSearchPolicy ?? (request.profile.id === "market_agent" ? "market" : "criteria"),
